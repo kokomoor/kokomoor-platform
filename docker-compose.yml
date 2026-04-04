@@ -1,0 +1,31 @@
+version: "3.9"
+
+# Kokomoor Platform — Docker Compose
+# Run: docker compose up --build
+# Individual pipeline: docker compose up job-agent
+
+services:
+  # --- Pipeline: Job Application Agent ---
+  job-agent:
+    build:
+      context: .
+      dockerfile: pipelines/job_agent/Dockerfile
+    container_name: kp-job-agent
+    env_file: .env
+    volumes:
+      - ./data:/app/data          # Persistent SQLite + generated files
+      - ./pipelines/job_agent/prompts:/app/pipelines/job_agent/prompts:ro
+      - ./pipelines/job_agent/context:/app/pipelines/job_agent/context:ro
+    depends_on: []
+    restart: unless-stopped
+
+  # --- Prometheus (observability) ---
+  # Uncomment when ready for metrics scraping (Milestone 5)
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: kp-prometheus
+  #   volumes:
+  #     - ./scripts/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   ports:
+  #     - "9090:9090"
+  #   restart: unless-stopped

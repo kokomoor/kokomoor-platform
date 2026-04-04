@@ -1,0 +1,85 @@
+# Candidate Profile — Machine-Readable Extract
+# Used by the Tailoring node to provide Claude with structured context.
+# Derived from master_context.md Section 1.
+
+name: Samuel Kokomoor
+email: kokomoor@mit.edu
+phone: "(860) 389-5347"
+location: Boston, MA
+linkedin: linkedin.com/in/sam-kokomoor-b90629247/
+github: github.com/kokomoor
+clearance: DoD Final Secret (active)
+
+education:
+  - school: MIT Sloan School of Management
+    degree: MBA
+    graduation: May 2026
+    gpa: "4.0"
+    highlights:
+      - Certificates in Finance and Entrepreneurship
+      - Cross-registered Nuclear Science & Engineering
+      - Cross-registered EECS Machine Learning
+      - GenAI Lab project lead
+
+  - school: University of Connecticut
+    degrees:
+      - BS Computer Engineering
+      - BS Electrical Engineering
+      - BA Computer Science
+    minor: Mathematics
+    graduation: 2021
+    gpa: "3.429"
+    highlights:
+      - LSTM time-series prediction research
+      - Naval Science & Technology sub-plan
+
+experience:
+  - company: MIT Co-ops
+    roles:
+      - "Helium Health: Team lead, GTM + tech requirements for EMR data sales (traveled to Kenya)"
+      - "ICAAD: Team lead, genAI analytics MVP for court data discrimination detection"
+      - "Mira Intel: Team lead, genAI analytics MVP for drone-based wind turbine inspection"
+
+  - company: MIT Lincoln Laboratory
+    title: Embedded Software Engineer
+    dates: 2023-2025
+    highlights:
+      - "$100M Army RADAR modernization program"
+      - "Hardware-in-the-loop test platform (C++ firmware → Python pipeline)"
+      - "Arbitrary waveform generation for RADAR arrays"
+      - "Software deployed at Reagan Test Site, Kwajalein Atoll"
+
+  - company: Gauntlet-42 LLC
+    title: Cofounder
+    dates: 2022-Present
+    highlights:
+      - "AI-native automated public-records researcher (Spyglass)"
+      - "3 paying customers, $300+ MRR, MIT Sandbox funded"
+      - "OCR → NLP/LLM extraction → recursive orchestration pipeline"
+      - "3-person team, zero turnover"
+
+  - company: General Dynamics Electric Boat
+    title: Engineer I → Engineer II
+    dates: 2021-2023
+    highlights:
+      - "Managed 5 technicians + 3 junior engineers"
+      - "Submarine flight-critical hardware testing"
+      - "Saved US Navy $2M in costs"
+      - "Leadership commendation for hardware testbed Mk. IV"
+
+skills:
+  languages: [Python, "C/C++", "C#", JavaScript, MySQL, SQL]
+  frameworks: [Django, "ASP.NET Core"]
+  domains: [Defense, PropTech, HealthTech, LegalTech, Nuclear Engineering]
+  tools: [Git, Jira, Docker, Playwright]
+
+positioning:
+  primary_target: Technical Product Manager / Senior TPM
+  salary_floor: 170000
+  differentiators:
+    - "Triple undergrad degrees + MIT MBA"
+    - "Active DoD Secret clearance"
+    - "Startup cofounder with revenue"
+    - "Defense engineering (submarine + RADAR)"
+    - "Nuclear engineering coursework"
+    - "Production ML/AI systems experience"
