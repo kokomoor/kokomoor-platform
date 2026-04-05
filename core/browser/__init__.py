@@ -15,13 +15,16 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-from types import TracebackType
+from typing import TYPE_CHECKING
 
 import structlog
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from core.browser.stealth import apply_stealth_defaults
 from core.config import get_settings
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 logger = structlog.get_logger(__name__)
 

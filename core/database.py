@@ -14,9 +14,9 @@ Usage:
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,13 +24,16 @@ from sqlmodel import SQLModel
 
 from core.config import get_settings
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 # Lazy engine creation — initialised on first use.
 _engine = None
 
 
 def _get_engine() -> create_async_engine:
     """Create or return the cached async engine."""
-    global _engine  # noqa: PLW0603
+    global _engine
     if _engine is None:
         settings = get_settings()
 
@@ -84,7 +87,7 @@ async def dispose_engine() -> None:
 
     Call this during application shutdown.
     """
-    global _engine  # noqa: PLW0603
+    global _engine
     if _engine is not None:
         await _engine.dispose()
         _engine = None

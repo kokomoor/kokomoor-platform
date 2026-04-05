@@ -8,12 +8,12 @@ checkpointing between nodes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from pipelines.job_agent.models import JobListing, SearchCriteria
 
 
-class PipelinePhase(str, Enum):
+class PipelinePhase(StrEnum):
     """Current phase of the pipeline run."""
 
     DISCOVERY = "discovery"

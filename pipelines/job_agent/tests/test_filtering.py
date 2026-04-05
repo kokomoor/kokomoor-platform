@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipelines.job_agent.models import ApplicationStatus, JobListing, JobSource
+from pipelines.job_agent.models import JobListing, JobSource
 from pipelines.job_agent.nodes.filtering import _passes_salary_filter, filtering_node
 from pipelines.job_agent.state import JobAgentState, PipelinePhase, SearchCriteria
 

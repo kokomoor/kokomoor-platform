@@ -7,9 +7,8 @@ All models use Pydantic for validation and SQLModel for persistence.
 
 from __future__ import annotations
 
-from datetime import datetime
-from enum import Enum
-from typing import Optional
+from datetime import datetime  # noqa: TC003
+from enum import StrEnum
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field as PydanticField
@@ -17,11 +16,10 @@ from sqlmodel import Field, SQLModel
 
 from core.models import TimestampMixin
 
-
 # ---------- Enums ----------
 
 
-class ApplicationStatus(str, Enum):
+class ApplicationStatus(StrEnum):
     """Lifecycle states for a job application."""
 
     DISCOVERED = "discovered"
@@ -38,7 +36,7 @@ class ApplicationStatus(str, Enum):
     REJECTED = "rejected"
 
 
-class JobSource(str, Enum):
+class JobSource(StrEnum):
     """Where a job listing was discovered."""
 
     LINKEDIN = "linkedin"
@@ -60,16 +58,16 @@ class JobListing(TimestampMixin, SQLModel, table=True):
 
     __tablename__ = "job_listings"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     title: str = Field(index=True, max_length=256)
     company: str = Field(index=True, max_length=256)
     location: str = Field(default="", max_length=256)
     url: str = Field(max_length=2048)
     source: JobSource = Field(default=JobSource.OTHER)
     description: str = Field(default="")
-    salary_min: Optional[int] = None
-    salary_max: Optional[int] = None
-    remote: Optional[bool] = None
+    salary_min: int | None = None
+    salary_max: int | None = None
+    remote: bool | None = None
     status: ApplicationStatus = Field(default=ApplicationStatus.DISCOVERED)
     dedup_key: str = Field(
         index=True,
@@ -79,12 +77,12 @@ class JobListing(TimestampMixin, SQLModel, table=True):
     )
 
     # Populated after tailoring.
-    tailored_resume_path: Optional[str] = None
-    tailored_cover_letter_path: Optional[str] = None
+    tailored_resume_path: str | None = None
+    tailored_cover_letter_path: str | None = None
 
     # Populated after application.
-    applied_at: Optional[datetime] = None
-    notes: Optional[str] = None
+    applied_at: datetime | None = None
+    notes: str | None = None
 
 
 # ---------- Pydantic Models (non-persisted) ----------

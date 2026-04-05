@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 from core.config import Environment, Settings, get_settings
 
 

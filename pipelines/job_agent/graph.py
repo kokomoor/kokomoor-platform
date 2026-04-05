@@ -20,7 +20,7 @@ from pipelines.job_agent.nodes.discovery import discovery_node
 from pipelines.job_agent.nodes.filtering import filtering_node
 from pipelines.job_agent.nodes.notification import notification_node
 from pipelines.job_agent.nodes.tracking import tracking_node
-from pipelines.job_agent.state import JobAgentState, PipelinePhase
+from pipelines.job_agent.state import JobAgentState
 
 logger = structlog.get_logger(__name__)
 
