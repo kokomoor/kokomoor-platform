@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from pipelines.job_agent.models import SearchCriteria
 from pipelines.job_agent.nodes.discovery import _generate_dedup_key, discovery_node
-from pipelines.job_agent.state import JobAgentState, PipelinePhase, SearchCriteria
+from pipelines.job_agent.state import JobAgentState, PipelinePhase
 
 
 class TestDedupKey:

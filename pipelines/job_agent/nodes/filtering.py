@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import structlog
 
-from pipelines.job_agent.models import ApplicationStatus, JobFilter, JobListing
+from pipelines.job_agent.models import ApplicationStatus, JobListing
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
 
 logger = structlog.get_logger(__name__)
@@ -22,9 +22,7 @@ def _passes_salary_filter(listing: JobListing, floor: int) -> bool:
     if listing.salary_max is not None and listing.salary_max >= floor:
         return True
     # If no salary info, let it through for manual review.
-    if listing.salary_min is None and listing.salary_max is None:
-        return True
-    return False
+    return listing.salary_min is None and listing.salary_max is None
 
 
 async def filtering_node(state: JobAgentState) -> JobAgentState:

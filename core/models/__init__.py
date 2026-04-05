@@ -8,8 +8,7 @@ tracking, and soft deletion across the entire platform.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 from uuid import uuid4
 
 from sqlmodel import Field, SQLModel
@@ -36,7 +35,7 @@ class BaseModel(TimestampMixin):
     )
 
 
-class PipelineRunStatus(str, Enum):
+class PipelineRunStatus(StrEnum):
     """Universal status enum for pipeline run tracking."""
 
     PENDING = "pending"
@@ -58,10 +57,10 @@ class PipelineRun(BaseModel, table=True):
 
     pipeline_name: str = Field(index=True, max_length=64)
     status: PipelineRunStatus = Field(default=PipelineRunStatus.PENDING)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    metadata_json: Optional[str] = Field(
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+    metadata_json: str | None = Field(
         default=None,
         description="JSON-serialised run metadata (node counts, durations, etc.)",
     )

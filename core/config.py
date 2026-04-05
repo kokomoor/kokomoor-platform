@@ -13,7 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -25,7 +25,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-class Environment(str, Enum):
+class Environment(StrEnum):
     """Deployment environment."""
 
     DEV = "dev"

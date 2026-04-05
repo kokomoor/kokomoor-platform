@@ -11,11 +11,14 @@ scraping and multiple source adapters.
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
 
 import structlog
 
-from pipelines.job_agent.models import ApplicationStatus, JobListing, JobSource
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
+
+if TYPE_CHECKING:
+    from pipelines.job_agent.models import JobListing
 
 logger = structlog.get_logger(__name__)
 

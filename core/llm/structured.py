@@ -15,12 +15,13 @@ Usage:
 from __future__ import annotations
 
 import json
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from core.llm import LLMClient
+if TYPE_CHECKING:
+    from core.llm.protocol import LLMClient
 
 logger = structlog.get_logger(__name__)
 
@@ -61,10 +62,7 @@ async def structured_complete(
         ValueError: If the response cannot be parsed after all retries.
     """
     schema_json = json.dumps(response_model.model_json_schema(), indent=2)
-    full_prompt = (
-        f"{prompt}\n\n"
-        f"Respond with JSON matching this schema:\n{schema_json}"
-    )
+    full_prompt = f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
 
     last_error: str = ""
     for attempt in range(1 + max_retries):

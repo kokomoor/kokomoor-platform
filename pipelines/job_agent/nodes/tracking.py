@@ -29,13 +29,12 @@ async def tracking_node(state: JobAgentState) -> JobAgentState:
     state.phase = PipelinePhase.TRACKING
 
     total = (
-        len(state.discovered_listings)
-        + len(state.qualified_listings)
-        + len(state.applied_listings)
+        len(state.discovered_listings) + len(state.qualified_listings) + len(state.applied_listings)
     )
 
     logger.info(
         "tracking_update",
+        total=total,
         discovered=len(state.discovered_listings),
         qualified=len(state.qualified_listings),
         applied=len(state.applied_listings),

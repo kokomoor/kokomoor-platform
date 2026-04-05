@@ -10,13 +10,16 @@ Usage in conftest.py:
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
+
+from core.llm.usage import LLMUsage
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 
 @asynccontextmanager
@@ -29,8 +32,8 @@ async def get_test_session() -> AsyncGenerator[AsyncSession, None]:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
         try:
             yield session
         finally:
@@ -48,11 +51,26 @@ class MockLLMClient:
 
     def __init__(self, responses: list[str] | None = None) -> None:
         self.responses = list(responses or ["Mock LLM response."])
-        self.calls: list[tuple[str, dict]] = []
+        self.calls: list[tuple[str, dict[str, Any]]] = []
         self._call_index = 0
+        self.usage = LLMUsage()
 
-    async def complete(self, prompt: str, **kwargs: object) -> str:
+    async def complete(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.0,
+        model: str | None = None,
+    ) -> str:
         """Return the next canned response."""
+        kwargs = {
+            "system": system,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "model": model,
+        }
         self.calls.append((prompt, kwargs))
         response = self.responses[self._call_index % len(self.responses)]
         self._call_index += 1

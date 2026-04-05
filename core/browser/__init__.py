@@ -15,13 +15,16 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-from types import TracebackType
+from typing import TYPE_CHECKING
 
 import structlog
-from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 from core.browser.stealth import apply_stealth_defaults
 from core.config import get_settings
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 logger = structlog.get_logger(__name__)
 
@@ -35,7 +38,7 @@ class BrowserManager:
     """
 
     def __init__(self) -> None:
-        self._playwright: async_playwright | None = None
+        self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._last_navigation: float = 0.0

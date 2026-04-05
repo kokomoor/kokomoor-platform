@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from pipelines.job_agent.models import ApplicationStatus, JobListing, JobSource
+from pipelines.job_agent.models import JobListing, JobSource, SearchCriteria
 from pipelines.job_agent.nodes.filtering import _passes_salary_filter, filtering_node
-from pipelines.job_agent.state import JobAgentState, PipelinePhase, SearchCriteria
+from pipelines.job_agent.state import JobAgentState, PipelinePhase
 
 
 def _make_listing(salary_min: int | None = None, salary_max: int | None = None) -> JobListing:
@@ -29,11 +29,17 @@ class TestSalaryFilter:
         assert _passes_salary_filter(_make_listing(salary_min=200_000), 170_000) is True
 
     def test_below_floor(self) -> None:
-        assert _passes_salary_filter(_make_listing(salary_min=100_000, salary_max=120_000), 170_000) is False
+        assert (
+            _passes_salary_filter(_make_listing(salary_min=100_000, salary_max=120_000), 170_000)
+            is False
+        )
 
     def test_max_above_floor(self) -> None:
         """If max salary meets floor, listing passes."""
-        assert _passes_salary_filter(_make_listing(salary_min=150_000, salary_max=200_000), 170_000) is True
+        assert (
+            _passes_salary_filter(_make_listing(salary_min=150_000, salary_max=200_000), 170_000)
+            is True
+        )
 
     def test_no_salary_passes(self) -> None:
         """Listings without salary info are let through for manual review."""
