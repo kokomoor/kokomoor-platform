@@ -63,13 +63,15 @@ class MockLLMClient:
         max_tokens: int = 4096,
         temperature: float = 0.0,
         model: str | None = None,
+        run_id: str = "",
     ) -> str:
         """Return the next canned response."""
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "system": system,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "model": model,
+            "run_id": run_id,
         }
         self.calls.append((prompt, kwargs))
         response = self.responses[self._call_index % len(self.responses)]

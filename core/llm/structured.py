@@ -41,6 +41,7 @@ async def structured_complete(
     response_model: type[T],
     max_retries: int = 2,
     model: str | None = None,
+    run_id: str = "",
 ) -> T:
     """Request a structured response from Claude and validate it.
 
@@ -54,6 +55,7 @@ async def structured_complete(
         response_model: A Pydantic model class to validate against.
         max_retries: Number of retry attempts on validation failure.
         model: Optional model override.
+        run_id: Pipeline run identifier for log correlation.
 
     Returns:
         A validated instance of ``response_model``.
@@ -77,6 +79,7 @@ async def structured_complete(
             full_prompt + retry_context,
             system=_STRUCTURED_SYSTEM_PROMPT,
             model=model,
+            run_id=run_id,
         )
 
         # Strip markdown fences if Claude includes them despite instructions.

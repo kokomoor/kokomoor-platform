@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
 import anthropic
@@ -63,6 +64,7 @@ class AnthropicClient:
         max_tokens: int = 4096,
         temperature: float = 0.0,
         model: str | None = None,
+        run_id: str = "",
     ) -> str:
         """Send a completion request and return the text response.
 
@@ -72,6 +74,7 @@ class AnthropicClient:
             max_tokens: Maximum tokens in the response.
             temperature: Sampling temperature (0.0 = deterministic).
             model: Override the default model for this call.
+            run_id: Pipeline run identifier for log correlation.
 
         Returns:
             The assistant's text response.
@@ -80,10 +83,19 @@ class AnthropicClient:
             anthropic.APIError: If the request fails after retries.
         """
         model = model or self._model
+        request_id = uuid.uuid4().hex[:16]
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
-        log = logger.bind(model=model, prompt_len=len(prompt))
+        log = logger.bind(
+            model=model,
+            request_id=request_id,
+            run_id=run_id or None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            prompt_len=len(prompt),
+        )
         log.info("llm_request_start")
+        log.debug("llm_request_prompt", prompt=prompt, system=system)
 
         start = time.monotonic()
         try:
@@ -100,12 +112,30 @@ class AnthropicClient:
             raise
 
         latency_ms = (time.monotonic() - start) * 1000
+        stop_reason = response.stop_reason or "unknown"
+
+        cache_hit: bool | None = None
+        cache_creation_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        if cache_read_tokens > 0:
+            cache_hit = True
+        elif cache_creation_tokens > 0:
+            cache_hit = False
+
         cost = self.usage.record(
             model=model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             latency_ms=latency_ms,
+            request_id=request_id,
+            stop_reason=stop_reason,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            cache_hit=cache_hit,
         )
+
+        text_blocks = [block.text for block in response.content if block.type == "text"]
+        response_text = "\n".join(text_blocks)
 
         log.info(
             "llm_request_complete",
@@ -113,7 +143,19 @@ class AnthropicClient:
             output_tokens=response.usage.output_tokens,
             latency_ms=round(latency_ms, 1),
             cost_usd=round(cost, 6),
+            stop_reason=stop_reason,
+            cache_hit=cache_hit,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
+            response_len=len(response_text),
         )
+        log.debug("llm_request_response", response_text=response_text)
 
-        text_blocks = [block.text for block in response.content if block.type == "text"]
-        return "\n".join(text_blocks)
+        if stop_reason == "max_tokens":
+            log.warning(
+                "llm_response_truncated",
+                output_tokens=response.usage.output_tokens,
+                max_tokens=max_tokens,
+            )
+
+        return response_text

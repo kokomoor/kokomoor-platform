@@ -26,6 +26,16 @@ class LLMClient(Protocol):
         max_tokens: int = 4096,
         temperature: float = 0.0,
         model: str | None = None,
+        run_id: str = "",
     ) -> str:
-        """Send a completion request and return the assistant text."""
+        """Send a completion request and return the assistant text.
+
+        Args:
+            prompt: The user message content.
+            system: Optional system prompt.
+            max_tokens: Maximum tokens in the response.
+            temperature: Sampling temperature (0.0 = deterministic).
+            model: Override the default model for this call.
+            run_id: Pipeline run identifier for log correlation.
+        """
         ...
