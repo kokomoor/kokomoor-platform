@@ -46,12 +46,14 @@ class LLMUsage:
         self.total_cost_usd += call_cost
         self.total_calls += 1
 
-        self._call_log.append({
-            "model": model,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": round(call_cost, 6),
-            "latency_ms": round(latency_ms, 1),
-        })
+        self._call_log.append(
+            {
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": round(call_cost, 6),
+                "latency_ms": round(latency_ms, 1),
+            }
+        )
 
         return call_cost

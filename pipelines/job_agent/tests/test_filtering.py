@@ -29,11 +29,17 @@ class TestSalaryFilter:
         assert _passes_salary_filter(_make_listing(salary_min=200_000), 170_000) is True
 
     def test_below_floor(self) -> None:
-        assert _passes_salary_filter(_make_listing(salary_min=100_000, salary_max=120_000), 170_000) is False
+        assert (
+            _passes_salary_filter(_make_listing(salary_min=100_000, salary_max=120_000), 170_000)
+            is False
+        )
 
     def test_max_above_floor(self) -> None:
         """If max salary meets floor, listing passes."""
-        assert _passes_salary_filter(_make_listing(salary_min=150_000, salary_max=200_000), 170_000) is True
+        assert (
+            _passes_salary_filter(_make_listing(salary_min=150_000, salary_max=200_000), 170_000)
+            is True
+        )
 
     def test_no_salary_passes(self) -> None:
         """Listings without salary info are let through for manual review."""

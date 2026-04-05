@@ -62,10 +62,7 @@ async def structured_complete(
         ValueError: If the response cannot be parsed after all retries.
     """
     schema_json = json.dumps(response_model.model_json_schema(), indent=2)
-    full_prompt = (
-        f"{prompt}\n\n"
-        f"Respond with JSON matching this schema:\n{schema_json}"
-    )
+    full_prompt = f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
 
     last_error: str = ""
     for attempt in range(1 + max_retries):

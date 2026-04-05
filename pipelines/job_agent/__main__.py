@@ -35,8 +35,12 @@ async def main() -> None:
     criteria = SearchCriteria(
         keywords=["technical product manager", "senior software engineer"],
         target_companies=[
-            "Anduril", "NVIDIA", "Commonwealth Fusion Systems",
-            "Anthropic", "SpaceX", "Apple",
+            "Anduril",
+            "NVIDIA",
+            "Commonwealth Fusion Systems",
+            "Anthropic",
+            "SpaceX",
+            "Apple",
         ],
         target_roles=["TPM", "Senior Engineer", "Engineering Manager"],
         salary_floor=170_000,
