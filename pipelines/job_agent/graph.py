@@ -14,7 +14,8 @@ Usage:
 from __future__ import annotations
 
 import structlog
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END
+from langgraph.graph.state import CompiledStateGraph, StateGraph
 
 from pipelines.job_agent.nodes.discovery import discovery_node
 from pipelines.job_agent.nodes.filtering import filtering_node
@@ -40,7 +41,7 @@ def _should_continue_after_review(state: JobAgentState) -> str:
     return "application"
 
 
-def build_graph() -> StateGraph:
+def build_graph() -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobAgentState]:
     """Construct and compile the job agent LangGraph.
 
     Returns a compiled graph ready for ``ainvoke()`` or ``astream()``.
@@ -53,7 +54,9 @@ def build_graph() -> StateGraph:
     With conditional edges that skip stages when there's nothing to
     process (e.g., no qualified listings skip tailoring entirely).
     """
-    graph = StateGraph(JobAgentState)
+    graph: StateGraph[JobAgentState, None, JobAgentState, JobAgentState] = StateGraph(
+        JobAgentState,
+    )
 
     # Register nodes.
     graph.add_node("discovery", discovery_node)

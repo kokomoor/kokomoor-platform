@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from typing import cast
 
 import structlog
 
@@ -57,7 +58,7 @@ async def main() -> None:
     logger.info("pipeline_start", run_id=initial_state.run_id)
 
     try:
-        final_state = await graph.ainvoke(initial_state)
+        final_state = cast("JobAgentState", await graph.ainvoke(initial_state))
         logger.info(
             "pipeline_finished",
             phase=final_state.phase.value,

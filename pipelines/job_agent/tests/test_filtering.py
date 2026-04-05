@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from pipelines.job_agent.models import JobListing, JobSource
+from pipelines.job_agent.models import JobListing, JobSource, SearchCriteria
 from pipelines.job_agent.nodes.filtering import _passes_salary_filter, filtering_node
-from pipelines.job_agent.state import JobAgentState, PipelinePhase, SearchCriteria
+from pipelines.job_agent.state import JobAgentState, PipelinePhase
 
 
 def _make_listing(salary_min: int | None = None, salary_max: int | None = None) -> JobListing:
