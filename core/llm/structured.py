@@ -15,12 +15,13 @@ Usage:
 from __future__ import annotations
 
 import json
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from core.llm import LLMClient
+if TYPE_CHECKING:
+    from core.llm.protocol import LLMClient
 
 logger = structlog.get_logger(__name__)
 
