@@ -19,5 +19,6 @@ Given the job analysis and candidate profile below, create a tailoring plan that
 - Write a 1-2 sentence professional summary (max 40 words) targeting this specific role.
 - Select the most relevant subset of skills to highlight (8-12 items).
 - Only reference bullet IDs and section IDs that appear in the candidate profile above.
+- In bullet text and summary prose, do not use inline em dashes/en dashes. Prefer semicolons, commas, or sentence splits.
 
 {positioning_rules}

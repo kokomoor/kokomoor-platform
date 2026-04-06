@@ -57,7 +57,7 @@ def render_resume_docx(doc: TailoredResumeDocument, output_path: Path) -> Path:
     if doc.experience:
         _add_section_heading(document, "EXPERIENCE")
         for exp in doc.experience:
-            _add_entry_heading(document, f"{exp.company} — {exp.title}", exp.dates)
+            _add_entry_heading(document, f"{exp.company} - {exp.title}", exp.dates)
             for bullet in exp.bullets:
                 _add_bullet(document, bullet.text)
 
@@ -68,7 +68,7 @@ def render_resume_docx(doc: TailoredResumeDocument, output_path: Path) -> Path:
             date_str = edu.graduation
             if edu.gpa:
                 date_str += f" | GPA: {edu.gpa}"
-            _add_entry_heading(document, f"{edu.school} — {edu.degree}", date_str)
+            _add_entry_heading(document, f"{edu.school} - {edu.degree}", date_str)
             for bullet in edu.bullets:
                 _add_bullet(document, bullet.text)
 

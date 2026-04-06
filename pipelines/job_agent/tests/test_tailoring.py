@@ -273,6 +273,42 @@ class TestApplier:
         assert original is not None
         assert doc.experience[0].bullets[0].text == original.text
 
+    def test_normalizes_inline_dash_in_prose(self, master_profile: ResumeMasterProfile) -> None:
+        plan = ResumeTailoringPlan(
+            summary="Summary with em dash — still fine.",
+            experience_sections=[
+                SectionPlan(section_id="exp_alpha", bullet_order=["alpha_platform"]),
+            ],
+            education_sections=[],
+            bullet_ops=[
+                BulletOp(
+                    bullet_id="alpha_platform",
+                    op="rewrite",
+                    rewrite_text="Rewritten bullet with em dash — remove it",
+                ),
+            ],
+            skills_to_highlight=[],
+        )
+        doc = apply_tailoring_plan(master_profile, plan)
+        assert "—" not in doc.summary
+        assert "—" not in doc.experience[0].bullets[0].text
+        assert "; " in doc.summary
+        assert "; " in doc.experience[0].bullets[0].text
+
+    def test_preserves_dash_like_metadata(self, master_profile: ResumeMasterProfile) -> None:
+        plan = ResumeTailoringPlan(
+            summary="Normal summary text.",
+            experience_sections=[
+                SectionPlan(section_id="exp_alpha", bullet_order=["alpha_platform"]),
+            ],
+            education_sections=[],
+            bullet_ops=[BulletOp(bullet_id="alpha_platform", op="keep")],
+            skills_to_highlight=[],
+        )
+        doc = apply_tailoring_plan(master_profile, plan)
+        assert doc.experience[0].title == "Senior Engineer"
+        assert doc.experience[0].dates == "2022-2024"
+
 
 # ── Renderer ───────────────────────────────────────────────────────────
 
