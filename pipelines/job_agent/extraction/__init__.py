@@ -1,4 +1,8 @@
-"""Job-page extraction helpers for manual URL workflows."""
+"""Job-page extraction helpers for manual URL workflows.
+
+HTML transport uses ``core.fetch`` (`HttpFetcher`, `BrowserFetcher`); parsing and
+normalization to ``JobListing`` stay in this package.
+"""
 
 from pipelines.job_agent.extraction.manual_job_extractor import (
     ExtractedJobData,

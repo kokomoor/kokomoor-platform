@@ -1,5 +1,9 @@
 """Layered job-page extraction for direct listing URLs.
 
+Transport is shared infrastructure: ``core.fetch.HttpFetcher`` and
+``core.fetch.BrowserFetcher`` implement ``ContentFetcher``; this module only
+contains job-domain parsing (selectors, JSON-LD JobPosting mapping, scoring).
+
 Extraction order is deliberately resilient:
 1. Structured metadata (JSON-LD, meta tags)
 2. Provider-aware selectors (LinkedIn, Indeed, Greenhouse, Lever, Workday, Ashby)
@@ -7,29 +11,25 @@ Extraction order is deliberately resilient:
 4. Full-page text fallback
 
 If plain HTTP extraction is weak (often JS-rendered pages), the module retries
-with ``BrowserManager`` and re-runs extraction on rendered HTML.
+with ``BrowserFetcher`` (Playwright via ``BrowserManager``) and re-runs parsing.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass, field
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-import httpx
 import structlog
 from bs4 import BeautifulSoup, Tag
 
-from core.browser import BrowserManager
+from core.fetch import BrowserFetcher, HttpFetcher, iter_json_ld_objects_from_soup
 from pipelines.job_agent.models import JobSource
 
 logger = structlog.get_logger(__name__)
 
-_HTTP_TIMEOUT_SECONDS = 20.0
-_HTTP_MAX_RETRIES = 2
 _MIN_DESCRIPTION_CHARS = 500
 _MAX_SUMMARY_CHARS = 280
 
@@ -140,14 +140,16 @@ async def extract_job_data_from_url(url: str) -> ExtractedJobData:
     provider = detect_provider(canonical_input)
     source = map_provider_to_source(provider)
 
-    http_html, http_final_url = await _fetch_html_with_retries(canonical_input)
-    best = _extract_from_html(http_html, http_final_url, provider, source)
+    http_fetcher = HttpFetcher()
+    http_result = await http_fetcher.fetch(canonical_input)
+    http_final_url = canonicalize_job_url(http_result.final_url)
+    best = _extract_from_html(http_result.html, http_final_url, provider, source)
 
     needs_browser_fallback = (
         len(best.normalized_description) < _MIN_DESCRIPTION_CHARS
         or not best.title
         or not best.company
-        or _looks_js_blocked(http_html)
+        or _looks_js_blocked(http_result.html)
     )
 
     if needs_browser_fallback:
@@ -158,8 +160,10 @@ async def extract_job_data_from_url(url: str) -> ExtractedJobData:
             chars=len(best.normalized_description),
         )
         try:
-            rendered_html, rendered_url = await _fetch_with_browser(canonical_input)
-            rendered = _extract_from_html(rendered_html, rendered_url, provider, source)
+            browser_fetcher = BrowserFetcher()
+            browser_result = await browser_fetcher.fetch(canonical_input)
+            rendered_url = canonicalize_job_url(browser_result.final_url)
+            rendered = _extract_from_html(browser_result.html, rendered_url, provider, source)
             if len(rendered.normalized_description) > len(best.normalized_description):
                 best = rendered
         except Exception as exc:
@@ -227,59 +231,9 @@ def map_provider_to_source(provider: str) -> JobSource:
     }.get(provider, JobSource.OTHER)
 
 
-async def _fetch_html_with_retries(url: str) -> tuple[str, str]:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    last_error = ""
-
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=httpx.Timeout(_HTTP_TIMEOUT_SECONDS),
-        headers=headers,
-    ) as client:
-        for attempt in range(_HTTP_MAX_RETRIES + 1):
-            try:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                final_url = canonicalize_job_url(str(resp.url))
-                logger.info(
-                    "manual_extract.http_fetch",
-                    url=final_url,
-                    status=resp.status_code,
-                    attempt=attempt + 1,
-                )
-                return resp.text, final_url
-            except httpx.HTTPError as exc:
-                last_error = str(exc)
-                if attempt == _HTTP_MAX_RETRIES:
-                    break
-                logger.warning(
-                    "manual_extract.http_retry",
-                    url=url,
-                    attempt=attempt + 1,
-                    error=last_error[:160],
-                )
-
-    msg = f"HTTP fetch failed after retries: {last_error}"
-    raise ValueError(msg)
-
-
-async def _fetch_with_browser(url: str) -> tuple[str, str]:
-    async with BrowserManager() as browser:
-        page = await browser.new_page()
-        await browser.rate_limited_goto(page, url)
-        await page.wait_for_timeout(1500)
-        html = await page.content()
-        final_url = canonicalize_job_url(page.url)
-        return html, final_url
-
-
-def _extract_from_html(html: str, final_url: str, provider: str, source: JobSource) -> ExtractedJobData:
+def _extract_from_html(
+    html: str, final_url: str, provider: str, source: JobSource
+) -> ExtractedJobData:
     soup = BeautifulSoup(html, "html.parser")
     structured = _extract_structured_fields(soup)
 
@@ -287,12 +241,7 @@ def _extract_from_html(html: str, final_url: str, provider: str, source: JobSour
     generic_block = _extract_generic_main_block(soup)
     fallback_block = _extract_full_page_text(soup)
 
-    raw_description = (
-        structured.description
-        or provider_block
-        or generic_block
-        or fallback_block
-    )
+    raw_description = structured.description or provider_block or generic_block or fallback_block
     normalized = normalize_description(raw_description)
     if len(normalized) < _MIN_DESCRIPTION_CHARS and len(fallback_block) > len(normalized):
         normalized = normalize_description(fallback_block)
@@ -315,9 +264,8 @@ def _extract_from_html(html: str, final_url: str, provider: str, source: JobSour
     else:
         remote = None
 
-    employment_type = (
-        normalize_line(structured.employment_type)
-        or infer_employment_type(normalized)
+    employment_type = normalize_line(structured.employment_type) or infer_employment_type(
+        normalized
     )
 
     return ExtractedJobData(
@@ -343,18 +291,12 @@ def _extract_from_html(html: str, final_url: str, provider: str, source: JobSour
 def _extract_structured_fields(soup: BeautifulSoup) -> _StructuredFields:
     merged = _StructuredFields()
 
-    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        if not isinstance(script, Tag):
+    for obj in iter_json_ld_objects_from_soup(soup):
+        posting = _extract_jobposting_object(obj)
+        if posting is None:
             continue
-        payload = (script.string or script.get_text() or "").strip()
-        if not payload:
-            continue
-        for obj in _load_jsonld_objects(payload):
-            posting = _extract_jobposting_object(obj)
-            if posting is None:
-                continue
-            extracted = _parse_jobposting(posting)
-            merged = _merge_structured(merged, extracted)
+        extracted = _parse_jobposting(posting)
+        merged = _merge_structured(merged, extracted)
 
     title_meta = _meta_content(soup, "og:title") or _meta_name_content(soup, "title")
     if title_meta and not merged.title:
@@ -377,16 +319,6 @@ def _merge_structured(base: _StructuredFields, incoming: _StructuredFields) -> _
         remote_mode=base.remote_mode or incoming.remote_mode,
         employment_type=base.employment_type or incoming.employment_type,
     )
-
-
-def _load_jsonld_objects(payload: str) -> list[object]:
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(data, list):
-        return data
-    return [data]
 
 
 def _extract_jobposting_object(obj: object) -> dict[str, object] | None:
@@ -566,7 +498,10 @@ def _extract_title(soup: BeautifulSoup) -> str:
 
 def _extract_company(soup: BeautifulSoup, provider: str) -> str:
     company_selectors = {
-        "linkedin": [".job-details-jobs-unified-top-card__company-name a", ".topcard__org-name-link"],
+        "linkedin": [
+            ".job-details-jobs-unified-top-card__company-name a",
+            ".topcard__org-name-link",
+        ],
         "indeed": [".jobsearch-CompanyInfoWithoutHeaderImage div"],
         "greenhouse": [".company-name", "meta[property='og:site_name']"],
         "lever": [".posting-headline .company", ".main-header-text"],

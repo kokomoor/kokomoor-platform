@@ -81,6 +81,26 @@ class Settings(BaseSettings):
         description="Minimum seconds between page navigations.",
     )
 
+    # --- HTTP / fetch (shared across pipelines) ---
+    fetch_http_timeout_seconds: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=300.0,
+        description="Timeout for httpx fetches in core.fetch.HttpFetcher.",
+    )
+    fetch_http_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description="Retry count for failed HTTP fetches (after first attempt).",
+    )
+    fetch_browser_post_wait_ms: int = Field(
+        default=1500,
+        ge=0,
+        le=30_000,
+        description="Milliseconds to wait after navigation before reading page HTML (browser fetch).",
+    )
+
     # --- Observability ---
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_json: bool = Field(

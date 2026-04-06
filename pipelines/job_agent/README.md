@@ -59,6 +59,7 @@ pytest pipelines/job_agent/tests/ -v
 All config via environment variables (prefix `KP_`). See `.env.example` at project root.
 
 Key settings for this pipeline:
+- `KP_FETCH_HTTP_TIMEOUT_SECONDS` / `KP_FETCH_HTTP_MAX_RETRIES` / `KP_FETCH_BROWSER_POST_WAIT_MS` — Shared HTTP/browser fetch (see `core.fetch`)
 - `KP_ANTHROPIC_API_KEY` — Required for Tailoring node
 - `KP_RESUME_MASTER_PROFILE_PATH` — Path to master resume profile YAML
 - `KP_RESUME_OUTPUT_DIR` — Output directory for tailored resumes

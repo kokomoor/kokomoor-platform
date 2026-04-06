@@ -11,6 +11,7 @@ Shared infrastructure library. All pipelines import from this package. Changes h
 | `models/` | Shared base models | `TimestampMixin`, `BaseModel`, `PipelineRun` |
 | `llm/` | LLM abstraction layer | See `core/llm/AGENTS.md` |
 | `browser/` | Playwright lifecycle + stealth | `BrowserManager`, `stealth.py` |
+| `fetch/` | Shared HTTP/browser HTML fetch + JSON-LD script parsing | `HttpFetcher`, `BrowserFetcher`, `ContentFetcher`, `jsonld.py` |
 | `observability/` | Logging + metrics | `setup_logging()`, Prometheus counters |
 | `notifications/` | Async SMTP | `send_notification()` |
 | `testing/` | Test fixtures | `MockLLMClient`, `get_test_session()` |

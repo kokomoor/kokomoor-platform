@@ -31,7 +31,7 @@ Manual:  Manual Extraction (URL) → Tailoring → Tracking → Notification
 | `state.py` | `JobAgentState` dataclass + `PipelinePhase` enum |
 | `models/` | `JobListing` (SQLModel, persisted), `SearchCriteria` / `JobFilter` (Pydantic, transient) |
 | `nodes/` | One file per node — pure `async (state) -> state` functions |
-| `extraction/` | Layered URL extraction helpers (structured metadata, provider-aware parsing, generic fallback) |
+| `extraction/` | Job-specific URL → ``JobListing`` (layered parsing); **transport** via ``core.fetch`` (`HttpFetcher` / `BrowserFetcher`, ``ContentFetcher`` protocol) |
 | `resume/` | Tailoring subsystem: profile loading, plan application, `.docx` rendering |
 | `prompts/` | Markdown templates with `{placeholder}` format strings |
 | `context/candidate_profile.yaml` | Structured candidate data consumed by the Tailoring node (gitignored) |
