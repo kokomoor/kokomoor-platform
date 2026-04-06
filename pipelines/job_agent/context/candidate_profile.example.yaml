@@ -1,0 +1,37 @@
+# Example shape for context/candidate_profile.yaml — copy to candidate_profile.yaml and fill in.
+# candidate_profile.yaml is gitignored and stays on your machine only.
+
+name: Your Name
+email: you@example.com
+phone: "+1-555-0100"
+location: City, ST
+linkedin: linkedin.com/in/your-profile
+github: github.com/youruser
+clearance: null
+
+education:
+  - school: Example University
+    degree: BS Example
+    graduation: "20XX"
+    gpa: "0.0"
+    highlights:
+      - Relevant coursework or honors
+
+experience:
+  - company: Example Corp
+    title: Example Role
+    dates: 20XX-Present
+    highlights:
+      - Impact bullet with metrics
+
+skills:
+  languages: [Python]
+  frameworks: []
+  domains: []
+  tools: [Git]
+
+positioning:
+  primary_target: Your target title
+  salary_floor: 0
+  differentiators:
+    - Short differentiator

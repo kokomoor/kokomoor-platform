@@ -52,13 +52,14 @@ Templates in `prompts/` use `{placeholder}` syntax:
 
 The cover letter prompt defines a **quality benchmark**: direct, concrete, no filler, 250-400 words. Maintain this standard.
 
-## Context folder (`context/`)
+## Context folder (`pipelines/job_agent/context/`)
 
-Contains reference materials consumed by the Tailoring node. **Not version-controlled** (`context/` is gitignored).
+Reference materials for the Tailoring node. **Private files here are gitignored** (see root `.gitignore`); only `candidate_profile.example.yaml` ships in git — copy it to `candidate_profile.yaml` locally and edit. Repo-root `/context/` (gitignored) can hold bulk assets (PDFs, decks) if you prefer not to keep them under the pipeline path.
 
 | File(s) | Purpose |
 |---------|---------|
-| `candidate_profile.yaml` | Structured profile data fed to prompts. **Primary input** for tailoring. |
+| `candidate_profile.yaml` | Structured profile data fed to prompts. **Primary input** for tailoring. Local only. |
+| `candidate_profile.example.yaml` | Committed template; safe to push. |
 | `Resume_Kokomoor_*.pdf/.docx` | Multiple resume versions for different positioning (defense-lead, tech-lead, startup-lead). Quality and voice benchmarks for generated resumes. |
 | `Anduril.docx`, `CoverLetter_*.docx` | Cover letter examples. The Anduril letter is the explicit quality target referenced in `prompts/tailor_cover_letter.md`. |
 | `Gauntlet-42_*.docx`, `Gauntlet - Dealum.pdf`, `Gauntlet_Pitch_Deck_*.pdf`, `Spyglass.pdf` | Startup/product depth. Use when tailoring for AI, startup, or PropTech roles — Spyglass is an "AI-native automated public-records researcher" with OCR/NLP/LLM extraction pipelines. |

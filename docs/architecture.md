@@ -74,7 +74,7 @@ pipelines/<name>/
 
 ## Context folder
 
-The root `context/` directory is **gitignored** — it contains local-only reference materials (resumes, cover letters, pitch decks, transcripts) used by the job agent's Tailoring node. The structured extract lives in `pipelines/job_agent/context/candidate_profile.yaml` (version-controlled). See `pipelines/job_agent/AGENTS.md` for the full inventory.
+The root `/context/` directory is **gitignored** — local-only reference materials (resumes, cover letters, pitch decks, transcripts). Under `pipelines/job_agent/context/`, real tailoring inputs (including `candidate_profile.yaml`) are **gitignored**; only `candidate_profile.example.yaml` is committed as a schema template. Copy the example to `candidate_profile.yaml` locally. See `pipelines/job_agent/AGENTS.md` for the full inventory.
 
 ## Configuration
 
