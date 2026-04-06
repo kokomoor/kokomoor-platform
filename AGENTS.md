@@ -1,0 +1,58 @@
+# AGENTS.md — Kokomoor Platform
+
+Personal agentic pipeline platform. Shared infrastructure (`core/`) powers self-contained automation pipelines (`pipelines/`). The first pipeline automates job search.
+
+## Read first
+
+1. `docs/product-vision.md` — what this is, who it's for, hard constraints
+2. `docs/architecture.md` — system layout, package boundaries, data flow
+3. `docs/decisions.md` — why key choices were made
+4. `docs/glossary.md` — domain and codebase terminology
+
+## Repo structure
+
+```
+core/           Shared library: config, database, LLM, browser, observability, notifications
+pipelines/      Self-contained pipelines (each has own models, nodes, tests, Dockerfile)
+alembic/        Database migrations (shared)
+docs/           Architecture docs, decisions, glossary
+scripts/        Setup scripts
+.github/        CI workflow
+```
+
+## How to validate changes
+
+Every change must pass all three before merge:
+
+```bash
+ruff check core/ pipelines/
+ruff format --check core/ pipelines/
+mypy core/ pipelines/ --ignore-missing-imports
+pytest
+```
+
+CI (`.github/workflows/ci.yml`) enforces this on all PRs to `main`.
+
+## Key invariants
+
+- **`core/` is a library.** Pipelines import from it. Never add pipeline-specific logic to `core/`.
+- **Each pipeline is self-contained.** Own models, nodes, state, tests, prompts. Imports only from `core/`.
+- **Never auto-submit applications.** The job agent must pause for human approval before any submission.
+- **All browser automation goes through `BrowserManager`.** Stealth and rate limiting are mandatory.
+- **LLM calls go through `LLMClient` protocol.** Pipeline code never imports provider SDKs directly.
+- **All config via `KP_*` env vars.** Add new settings to `core/config.py`. See `.env.example`.
+
+## Working norms
+
+- Run `ruff format core/ pipelines/` before committing.
+- Use `structlog.get_logger(__name__)` for all logging. Never `print()` or stdlib `logging` directly.
+- Type all public function signatures. mypy strict is enabled.
+- Tests use `MockLLMClient` and in-memory SQLite — no real API calls.
+
+## Scoped guidance
+
+These directories have their own `AGENTS.md` with local rules:
+
+- `core/AGENTS.md` — shared infrastructure rules
+- `core/llm/AGENTS.md` — LLM abstraction and provider implementation
+- `pipelines/job_agent/AGENTS.md` — job pipeline domain, nodes, and constraints
