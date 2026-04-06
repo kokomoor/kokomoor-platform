@@ -21,4 +21,12 @@ Given the job analysis and candidate profile below, create a tailoring plan that
 - Only reference bullet IDs and section IDs that appear in the candidate profile above.
 - In bullet text and summary prose, do not use inline em dashes/en dashes. Prefer semicolons, commas, or sentence splits.
 
+## Page-fill constraint
+The rendered resume must fill at least one full page. A resume that leaves visible whitespace at the bottom of the first page looks incomplete. To achieve this:
+- Include at least 3 experience sections with 3-4 bullets each.
+- Include at least 2 education sections with 1-2 bullets each.
+- Include at least 6-8 skills in the skills highlight.
+- When in doubt between keeping an additional relevant bullet or omitting it, keep it.
+- The resume may extend slightly past one page for senior roles; that is acceptable. Being shorter than one page is never acceptable.
+
 {positioning_rules}

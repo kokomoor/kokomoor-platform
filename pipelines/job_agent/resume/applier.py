@@ -57,6 +57,8 @@ def apply_tailoring_plan(
                 company=_normalize_whitespace(master_exp.company),
                 title=_normalize_whitespace(master_exp.title),
                 dates=_normalize_whitespace(master_exp.dates),
+                location=_normalize_whitespace(master_exp.location),
+                subtitle=_normalize_whitespace(master_exp.subtitle),
                 bullets=bullets[:MAX_BULLETS_PER_EXPERIENCE_SECTION],
             )
         )
@@ -75,9 +77,14 @@ def apply_tailoring_plan(
                 degree=_normalize_whitespace(master_edu.degree),
                 graduation=_normalize_whitespace(master_edu.graduation),
                 gpa=_normalize_whitespace(master_edu.gpa),
+                location=_normalize_whitespace(master_edu.location),
                 bullets=bullets[:MAX_BULLETS_PER_EDUCATION_SECTION],
             )
         )
+
+    additional_info: list[str] = []
+    if profile.clearance:
+        additional_info.append(profile.clearance)
 
     return TailoredResumeDocument(
         name=_normalize_whitespace(profile.name),
@@ -94,6 +101,7 @@ def apply_tailoring_plan(
             _normalize_whitespace(skill)
             for skill in plan.skills_to_highlight[:MAX_SKILLS_TO_HIGHLIGHT]
         ],
+        additional_info=additional_info,
     )
 
 

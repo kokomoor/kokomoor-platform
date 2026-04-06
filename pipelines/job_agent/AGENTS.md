@@ -74,18 +74,34 @@ Context pruning: the `format_profile_for_llm` function accepts a `relevant_tags`
 
 | Model | Purpose |
 |-------|---------|
-| `ResumeMasterProfile` | Loaded from YAML — all possible bullets with IDs and tags |
+| `ResumeMasterProfile` | Loaded from YAML — all possible bullets with IDs, tags, locations, subtitles |
 | `JobAnalysisResult` | LLM pass 1 output — themes, seniority, domain tags |
 | `ResumeTailoringPlan` | LLM pass 2 output — bullet selection, ordering, ops |
-| `TailoredResumeDocument` | Post-application structure, input to `.docx` renderer |
+| `TailoredResumeDocument` | Post-application structure with location/subtitle/additional_info, input to `.docx` renderer |
 
 ### Resume package (`resume/`)
 
 | File | Role |
 |------|------|
-| `profile.py` | Load YAML → `ResumeMasterProfile`; format profile text for LLM |
-| `applier.py` | Pure function: `(profile, plan) → TailoredResumeDocument` |
-| `renderer.py` | `TailoredResumeDocument → .docx` with Calibri styling |
+| `profile.py` | Load YAML → `ResumeMasterProfile`; format profile text for LLM (with optional tag filtering) |
+| `applier.py` | Pure function: `(profile, plan) → TailoredResumeDocument` with location/subtitle passthrough |
+| `renderer.py` | `TailoredResumeDocument → .docx` matching Kokomoor template (Times New Roman, section borders, tab-aligned dates) |
+
+### Renderer format spec
+
+The renderer produces `.docx` files matching the Kokomoor resume template (Feb/Sep/Mar reference documents):
+- **Font**: Times New Roman 11.5pt throughout, ALL CAPS via `w:caps` flag on section headers and company/school names
+- **Layout**: US Letter, 0.5" top/bottom margins, 0.65" left/right margins, 10pt minimum line spacing
+- **Section order**: EDUCATION → EXPERIENCE → TECHNICAL SKILLS → ADDITIONAL INFORMATION
+- **Section headers**: Bold, ALL CAPS, black 1.5pt bottom border
+- **Company/School**: Bold, ALL CAPS, right-tab-aligned location at 7.19"
+- **Subtitle**: Optional italic line (e.g., "Defense Contractor", "PropTech B2B SaaS Startup")
+- **Title/Degree**: Bold+italic (title) or italic (degree), right-tab-aligned dates
+- **Bullets**: Indented list with left=270 hanging=280 twips
+- **Line spacing**: 10pt AT_LEAST (allows text to breathe with 11.5pt font)
+- **Spacers**: Non-breaking-space paragraph between each experience entry; no spacer between education entries
+- **Experience**: Most recent first (ordering determined by LLM plan)
+- **Page-fill**: Resume must fill at least one full page; never leave whitespace at the bottom. Slightly over one page is acceptable for senior roles. This is enforced via prompt guidance in `tailor_resume_plan.md`.
 
 ## Prompt templates
 

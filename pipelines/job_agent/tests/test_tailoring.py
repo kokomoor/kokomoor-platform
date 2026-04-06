@@ -19,6 +19,7 @@ from pipelines.job_agent.models.resume_tailoring import (
     ResumeMasterProfile,
     ResumeTailoringPlan,
     SectionPlan,
+    TailoredExperience,
     TailoredResumeDocument,
 )
 from pipelines.job_agent.nodes.tailoring import _expand_domain_tags
@@ -373,12 +374,43 @@ class TestApplier:
         assert doc.experience[0].title == "Senior Engineer"
         assert doc.experience[0].dates == "2022-2024"
 
+    def test_location_and_subtitle_passthrough(self, master_profile: ResumeMasterProfile) -> None:
+        plan = ResumeTailoringPlan(
+            summary="Test.",
+            experience_sections=[
+                SectionPlan(section_id="exp_alpha", bullet_order=["alpha_platform"]),
+            ],
+            education_sections=[
+                SectionPlan(section_id="edu_test", bullet_order=["edu_test_ml"]),
+            ],
+            bullet_ops=[
+                BulletOp(bullet_id="alpha_platform", op="keep"),
+                BulletOp(bullet_id="edu_test_ml", op="keep"),
+            ],
+            skills_to_highlight=[],
+        )
+        doc = apply_tailoring_plan(master_profile, plan)
+        assert doc.experience[0].location == "New York, NY"
+        assert doc.experience[0].subtitle == "Enterprise SaaS Platform"
+        assert doc.education[0].location == "Boston, MA"
+
+    def test_additional_info_includes_clearance(self, master_profile: ResumeMasterProfile) -> None:
+        plan = ResumeTailoringPlan(
+            summary="Test.",
+            experience_sections=[],
+            education_sections=[],
+            bullet_ops=[],
+            skills_to_highlight=[],
+        )
+        doc = apply_tailoring_plan(master_profile, plan)
+        assert any("Test Clearance" in item for item in doc.additional_info)
+
 
 # ── Renderer ───────────────────────────────────────────────────────────
 
 
 class TestRenderer:
-    """Tests for .docx rendering."""
+    """Tests for .docx rendering matching the Kokomoor template format."""
 
     def test_render_creates_file(
         self, tailored_doc: TailoredResumeDocument, tmp_path: Path
@@ -405,8 +437,53 @@ class TestRenderer:
         doc = Document(str(out))
         texts = [p.text for p in doc.paragraphs if p.text.strip()]
         assert any("Test Candidate" in t for t in texts)
-        assert any("EXPERIENCE" in t for t in texts)
-        assert any("EDUCATION" in t for t in texts)
+
+    def test_education_before_experience(
+        self, tailored_doc: TailoredResumeDocument, tmp_path: Path
+    ) -> None:
+        from docx import Document
+
+        out = tmp_path / "resume.docx"
+        render_resume_docx(tailored_doc, out)
+        doc = Document(str(out))
+        texts = [p.text.lower() for p in doc.paragraphs if p.text.strip()]
+        edu_idx = next(i for i, t in enumerate(texts) if "education" in t)
+        exp_idx = next(i for i, t in enumerate(texts) if "experience" in t)
+        assert edu_idx < exp_idx
+
+    def test_location_and_subtitle_rendered(self, tmp_path: Path) -> None:
+        from docx import Document
+
+        from pipelines.job_agent.models.resume_tailoring import TailoredBullet
+
+        doc = TailoredResumeDocument(
+            name="Test",
+            location="Boston, MA",
+            email="t@t.com",
+            phone="555",
+            linkedin="",
+            github="",
+            clearance="",
+            summary="",
+            experience=[
+                TailoredExperience(
+                    company="Acme",
+                    title="Lead",
+                    dates="2024",
+                    location="NYC",
+                    subtitle="Defense Contractor",
+                    bullets=[TailoredBullet(id="b1", text="Did work")],
+                )
+            ],
+            education=[],
+            skills_highlight=[],
+        )
+        out = tmp_path / "resume.docx"
+        render_resume_docx(doc, out)
+        rendered = Document(str(out))
+        texts = [p.text for p in rendered.paragraphs]
+        assert any("NYC" in t for t in texts)
+        assert any("Defense Contractor" in t for t in texts)
 
 
 # ── Tailoring Node ─────────────────────────────────────────────────────

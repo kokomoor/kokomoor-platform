@@ -31,6 +31,8 @@ class MasterExperience(BaseModel):
     company: str
     title: str
     dates: str = ""
+    location: str = ""
+    subtitle: str = ""
     bullets: list[MasterBullet]
 
 
@@ -42,6 +44,7 @@ class MasterEducation(BaseModel):
     degree: str
     graduation: str
     gpa: str = ""
+    location: str = ""
     bullets: list[MasterBullet] = Field(default_factory=list)
 
 
@@ -182,6 +185,8 @@ class TailoredExperience(BaseModel):
     company: str
     title: str
     dates: str
+    location: str = ""
+    subtitle: str = ""
     bullets: list[TailoredBullet]
 
 
@@ -192,6 +197,7 @@ class TailoredEducation(BaseModel):
     degree: str
     graduation: str
     gpa: str
+    location: str = ""
     bullets: list[TailoredBullet]
 
 
@@ -209,3 +215,4 @@ class TailoredResumeDocument(BaseModel):
     experience: list[TailoredExperience]
     education: list[TailoredEducation]
     skills_highlight: list[str]
+    additional_info: list[str] = Field(default_factory=list)

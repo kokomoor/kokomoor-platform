@@ -17,6 +17,7 @@ education:
     degree: BS Computer Science
     graduation: "2021"
     gpa: "3.5"
+    location: Boston, MA
     bullets:
       - id: edu_test_ml
         text: "Machine learning research on time-series prediction using LSTMs"
@@ -30,6 +31,8 @@ experience:
     company: Alpha Corp
     title: Senior Engineer
     dates: "2022-2024"
+    location: New York, NY
+    subtitle: Enterprise SaaS Platform
     bullets:
       - id: alpha_platform
         text: "Led development of microservices platform serving 10M+ requests/day across 15 services"
@@ -52,6 +55,7 @@ experience:
     company: Beta Inc
     title: Software Engineer
     dates: "2019-2022"
+    location: San Francisco, CA
     bullets:
       - id: beta_pipeline
         text: "Built real-time data pipeline processing 500K events/second with sub-100ms latency"

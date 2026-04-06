@@ -17,7 +17,8 @@ education:
     school: Example University
     degree: BS Example
     graduation: "20XX"
-    gpa: "0.0"
+    gpa: ""
+    location: City, ST
     bullets:
       - id: edu_a_1
         text: "Relevant coursework or honors"
@@ -28,6 +29,8 @@ experience:
     company: Example Corp
     title: Example Role
     dates: "20XX-Present"
+    location: City, ST
+    subtitle: "Optional company description"
     bullets:
       - id: comp_a_1
         text: "Impact bullet with metrics"
