@@ -12,7 +12,7 @@ from typing import Any
 import structlog
 import yaml
 
-from pipelines.job_agent.models.resume_tailoring import ResumeMasterProfile
+from pipelines.job_agent.models.resume_tailoring import MasterBullet, ResumeMasterProfile
 
 logger = structlog.get_logger(__name__)
 
@@ -44,11 +44,21 @@ def load_master_profile(path: Path) -> ResumeMasterProfile:
     return profile
 
 
-def format_profile_for_llm(profile: ResumeMasterProfile) -> str:
+def format_profile_for_llm(
+    profile: ResumeMasterProfile,
+    *,
+    relevant_tags: set[str] | None = None,
+) -> str:
     """Render the master profile as structured text with visible bullet IDs.
 
     The LLM uses the bracketed IDs (e.g. ``[ll_radar]``) to reference
     specific bullets in its tailoring plan.
+
+    Args:
+        profile: The loaded master resume profile.
+        relevant_tags: If provided, only include bullets whose tags overlap
+            with this set. Sections with no remaining bullets are omitted.
+            Passing ``None`` includes everything (full profile).
     """
     lines: list[str] = []
 
@@ -59,17 +69,23 @@ def format_profile_for_llm(profile: ResumeMasterProfile) -> str:
 
     lines.append("EXPERIENCE:")
     for exp in profile.experience:
+        filtered = _filter_bullets(exp.bullets, relevant_tags)
+        if not filtered and relevant_tags is not None:
+            continue
         lines.append(f"[{exp.id}] {exp.company} | {exp.title} | {exp.dates}")
-        for b in exp.bullets:
+        for b in filtered:
             tag_str = ", ".join(b.tags) if b.tags else "general"
             lines.append(f"  - [{b.id}] {b.text} [{tag_str}]")
         lines.append("")
 
     lines.append("EDUCATION:")
     for edu in profile.education:
+        filtered = _filter_bullets(edu.bullets, relevant_tags)
+        if not filtered and relevant_tags is not None:
+            continue
         gpa = f" | GPA: {edu.gpa}" if edu.gpa else ""
         lines.append(f"[{edu.id}] {edu.school} | {edu.degree} | {edu.graduation}{gpa}")
-        for b in edu.bullets:
+        for b in filtered:
             tag_str = ", ".join(b.tags) if b.tags else "general"
             lines.append(f"  - [{b.id}] {b.text} [{tag_str}]")
         lines.append("")
@@ -85,3 +101,13 @@ def format_profile_for_llm(profile: ResumeMasterProfile) -> str:
         lines.append(f"  Tools: {', '.join(profile.skills.tools)}")
 
     return "\n".join(lines)
+
+
+def _filter_bullets(
+    bullets: list[MasterBullet],
+    relevant_tags: set[str] | None,
+) -> list[MasterBullet]:
+    """Return bullets matching *relevant_tags*, or all if tags is None."""
+    if relevant_tags is None:
+        return bullets
+    return [b for b in bullets if set(b.tags) & relevant_tags]

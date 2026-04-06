@@ -1,7 +1,8 @@
 """Tests for the resume tailoring pipeline.
 
-Covers profile loading, plan application, .docx rendering, and the
-full tailoring node with MockLLMClient (no real API calls).
+Covers profile loading, plan application, .docx rendering, context
+pruning, analysis caching, model split, and the full tailoring node
+with MockLLMClient (no real API calls).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pipelines.job_agent.models.resume_tailoring import (
     SectionPlan,
     TailoredResumeDocument,
 )
+from pipelines.job_agent.nodes.tailoring import _expand_domain_tags
 from pipelines.job_agent.resume.applier import apply_tailoring_plan
 from pipelines.job_agent.resume.profile import format_profile_for_llm, load_master_profile
 from pipelines.job_agent.resume.renderer import render_resume_docx
@@ -172,6 +174,68 @@ class TestMasterProfileLoading:
         assert "EXPERIENCE:" in text
         assert "EDUCATION:" in text
         assert "SKILLS:" in text
+
+    def test_format_with_tag_filter_includes_matching(
+        self, master_profile: ResumeMasterProfile
+    ) -> None:
+        text = format_profile_for_llm(master_profile, relevant_tags={"ml", "technical"})
+        assert "[alpha_platform]" in text
+        assert "[alpha_ml]" in text
+        assert "[edu_test_ml]" in text
+
+    def test_format_with_tag_filter_excludes_non_matching(
+        self, master_profile: ResumeMasterProfile
+    ) -> None:
+        text = format_profile_for_llm(master_profile, relevant_tags={"finance"})
+        assert "[beta_fraud]" in text
+        assert "[alpha_platform]" not in text
+        assert "[alpha_ml]" not in text
+
+    def test_format_with_tag_filter_omits_empty_sections(
+        self, master_profile: ResumeMasterProfile
+    ) -> None:
+        text = format_profile_for_llm(master_profile, relevant_tags={"finance"})
+        assert "[exp_alpha]" not in text
+        assert "[exp_beta]" in text
+
+    def test_format_with_none_tags_includes_all(self, master_profile: ResumeMasterProfile) -> None:
+        full = format_profile_for_llm(master_profile)
+        also_full = format_profile_for_llm(master_profile, relevant_tags=None)
+        assert full == also_full
+
+    def test_filtered_profile_is_shorter(self, master_profile: ResumeMasterProfile) -> None:
+        full = format_profile_for_llm(master_profile)
+        filtered = format_profile_for_llm(master_profile, relevant_tags={"finance"})
+        assert len(filtered) < len(full)
+
+
+# ── Tag Expansion ─────────────────────────────────────────────────────
+
+
+class TestTagExpansion:
+    """Tests for domain tag expansion to profile tag vocabulary."""
+
+    def test_direct_tags_preserved(self) -> None:
+        result = _expand_domain_tags(["defense", "ml"])
+        assert "defense" in result
+        assert "ml" in result
+
+    def test_synonyms_expanded(self) -> None:
+        result = _expand_domain_tags(["military"])
+        assert "defense" in result
+        assert "naval" in result
+
+    def test_always_relevant_tags_included(self) -> None:
+        result = _expand_domain_tags(["finance"])
+        assert "leadership" in result
+        assert "technical" in result
+        assert "management" in result
+        assert "software" in result
+
+    def test_case_insensitive(self) -> None:
+        result = _expand_domain_tags(["Defense", "ML"])
+        assert "defense" in result
+        assert "ml" in result
 
 
 # ── Applier ────────────────────────────────────────────────────────────
@@ -455,17 +519,113 @@ class TestTailoringNode:
 
         assert len(mock_client.calls) == 2
 
+    @pytest.mark.asyncio
+    async def test_analysis_uses_cheap_model(self, tmp_path: Path) -> None:
+        """Analysis pass should use the configured analysis model."""
+        from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[_make_listing()],
+            run_id="test-model-split",
+        )
+        _patch_settings(tmp_path, analysis_model="claude-haiku-4-5-20251001")
+        await tailoring_node(state, llm_client=mock_client)
+
+        analysis_call = mock_client.calls[0]
+        plan_call = mock_client.calls[1]
+        assert analysis_call[1]["model"] == "claude-haiku-4-5-20251001"
+        assert plan_call[1]["model"] is None  # uses client default
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_passed_per_phase(self, tmp_path: Path) -> None:
+        """Each phase should use its own max_tokens cap."""
+        from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[_make_listing()],
+            run_id="test-max-tokens",
+        )
+        _patch_settings(tmp_path, analysis_max_tokens=512, plan_max_tokens=1024)
+        await tailoring_node(state, llm_client=mock_client)
+
+        assert mock_client.calls[0][1]["max_tokens"] == 512
+        assert mock_client.calls[1][1]["max_tokens"] == 1024
+
+    @pytest.mark.asyncio
+    async def test_analysis_cache_reuses_result(self, tmp_path: Path) -> None:
+        """Two listings with the same dedup_key should share a cached analysis."""
+        from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+        mock_client = MockLLMClient(
+            responses=[_mock_analysis_json(), _mock_plan_json(), _mock_plan_json()]
+        )
+        listing_a = _make_listing(dedup_key="same_key")
+        listing_b = _make_listing(dedup_key="same_key")
+
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing_a, listing_b],
+            run_id="test-cache",
+        )
+        _patch_settings(tmp_path)
+        await tailoring_node(state, llm_client=mock_client)
+
+        assert len(mock_client.calls) == 3  # 1 analysis + 2 plans (not 2+2)
+
+    @pytest.mark.asyncio
+    async def test_cache_disabled_calls_analysis_twice(self, tmp_path: Path) -> None:
+        """With cache off, duplicate dedup_keys still run separate analyses."""
+        from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+        mock_client = MockLLMClient(
+            responses=[
+                _mock_analysis_json(),
+                _mock_plan_json(),
+                _mock_analysis_json(),
+                _mock_plan_json(),
+            ]
+        )
+        listing_a = _make_listing(dedup_key="same_key")
+        listing_b = _make_listing(dedup_key="same_key")
+
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing_a, listing_b],
+            run_id="test-no-cache",
+        )
+        _patch_settings(tmp_path, enable_cache=False)
+        await tailoring_node(state, llm_client=mock_client)
+
+        assert len(mock_client.calls) == 4  # 2 analyses + 2 plans
+
 
 # ── test helpers ───────────────────────────────────────────────────────
 
 
-def _patch_settings(tmp_path: Path) -> None:
+def _patch_settings(
+    tmp_path: Path,
+    *,
+    analysis_model: str = "claude-haiku-4-5-20251001",
+    plan_model: str = "",
+    analysis_max_tokens: int = 1024,
+    plan_max_tokens: int = 2048,
+    enable_cache: bool = True,
+) -> None:
     """Point resume settings at the test fixture profile and tmp output dir."""
+    import os
+
     from core.config import get_settings
 
     get_settings.cache_clear()
-    import os
-
     os.environ["KP_RESUME_MASTER_PROFILE_PATH"] = str(_FIXTURES_DIR / "master_profile.yaml")
     os.environ["KP_RESUME_OUTPUT_DIR"] = str(tmp_path / "output")
+    os.environ["KP_RESUME_ANALYSIS_MODEL"] = analysis_model
+    os.environ["KP_RESUME_PLAN_MODEL"] = plan_model
+    os.environ["KP_RESUME_ANALYSIS_MAX_TOKENS"] = str(analysis_max_tokens)
+    os.environ["KP_RESUME_PLAN_MAX_TOKENS"] = str(plan_max_tokens)
+    os.environ["KP_RESUME_ENABLE_ANALYSIS_CACHE"] = str(enable_cache).lower()
     get_settings.cache_clear()

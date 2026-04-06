@@ -57,6 +57,19 @@ Convention: **mutate listings in place** — set `tailored_resume_path` and `sta
 
 The master profile YAML uses **schema v1**: each bullet has a stable `id`, `tags` list, and optional `variants` dict (`short`/`long`). The LLM references IDs; the applier resolves them deterministically.
 
+### Cost optimizations (all configurable)
+
+| Feature | Config flag | Default | Effect |
+|---------|------------|---------|--------|
+| Model split | `KP_RESUME_ANALYSIS_MODEL` | `claude-haiku-4-5-20251001` | Analysis pass uses cheaper model; plan pass uses `KP_ANTHROPIC_MODEL` |
+| Plan model override | `KP_RESUME_PLAN_MODEL` | `""` (= default) | Override the plan-pass model separately |
+| Analysis max tokens | `KP_RESUME_ANALYSIS_MAX_TOKENS` | `1024` | Caps output length for analysis JSON |
+| Plan max tokens | `KP_RESUME_PLAN_MAX_TOKENS` | `2048` | Caps output length for plan JSON |
+| Analysis cache | `KP_RESUME_ENABLE_ANALYSIS_CACHE` | `true` | Reuses analysis results for duplicate `dedup_key` within a run |
+| Context pruning | automatic | always on | Only profile bullets whose tags match the analysis domain tags are sent to the plan pass |
+
+Context pruning: the `format_profile_for_llm` function accepts a `relevant_tags` set. The node expands the analysis `domain_tags` via `_TAG_EXPANSION` (synonym mapping) and adds universally-relevant tags (`leadership`, `technical`, etc.) so important bullets are never dropped. Sections with no matching bullets are omitted entirely, reducing prompt tokens.
+
 ### Resume models (`models/resume_tailoring.py`)
 
 | Model | Purpose |
@@ -116,4 +129,5 @@ pytest pipelines/job_agent/tests/ -v
 - Forgetting to cast `graph.ainvoke()` result — LangGraph types it loosely; use `cast("JobAgentState", ...)`.
 - Referencing bullet IDs in prompts or tests that don't exist in the master profile — validate against `ResumeMasterProfile.all_bullet_ids()`.
 - Using `state.tailored_listings` without checking `tailored_resume_path` — some listings may have failed tailoring; check per-listing path before downstream processing.
-- Passing `llm_client` to `build_graph()` without `MockLLMClient` responses matching the expected call count — tailoring makes 2 calls per listing (analysis + plan).
+- Passing `llm_client` to `build_graph()` without `MockLLMClient` responses matching the expected call count — tailoring makes 2 calls per listing (analysis + plan), but with `KP_RESUME_ENABLE_ANALYSIS_CACHE=true` duplicate `dedup_key` listings share a single analysis call.
+- Setting `KP_RESUME_ANALYSIS_MODEL` to empty string means the analysis falls back to the default `KP_ANTHROPIC_MODEL` (Sonnet), which is more expensive. Only do this if Haiku quality is insufficient for a specific use case.
