@@ -516,10 +516,19 @@ def _clone_without_noise(soup: BeautifulSoup) -> BeautifulSoup:
     ):
         node.decompose()
     for node in cloned.find_all(True):
-        attrs = " ".join(
-            str(node.get(attr, ""))
-            for attr in ("id", "class", "role", "aria-label")
-        ).lower()
+        if not isinstance(node, Tag):
+            continue
+        # Broken real-world HTML (e.g. some LinkedIn responses) can yield ``Tag.attrs is None``.
+        raw_attrs = getattr(node, "attrs", None)
+        mapping: dict[str, object] = raw_attrs if isinstance(raw_attrs, dict) else {}
+        attr_parts: list[str] = []
+        for attr in ("id", "class", "role", "aria-label"):
+            val = mapping.get(attr, "")
+            if isinstance(val, list):
+                attr_parts.append(" ".join(str(v) for v in val))
+            else:
+                attr_parts.append(str(val))
+        attrs = " ".join(attr_parts).lower()
         if any(
             token in attrs
             for token in ("cookie", "consent", "related", "newsletter", "breadcrumb", "share")

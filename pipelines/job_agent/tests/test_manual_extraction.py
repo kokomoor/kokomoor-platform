@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from bs4 import BeautifulSoup
 
 from pipelines.job_agent.extraction.manual_job_extractor import (
     ExtractedJobData,
+    _clone_without_noise,
     canonicalize_job_url,
     detect_provider,
     extract_job_data_from_html,
@@ -25,6 +27,17 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 def _fixture(name: str) -> str:
     return (_FIXTURES / name).read_text(encoding="utf-8")
+
+
+class TestCloneWithoutNoise:
+    def test_tolerates_tag_with_none_attrs(self) -> None:
+        """Real pages (e.g. LinkedIn) can produce malformed tags where ``attrs`` is None."""
+        soup = BeautifulSoup("<html><body><div>keep</div></body></html>", "html.parser")
+        div = soup.find("div")
+        assert div is not None
+        div.attrs = None  # type: ignore[assignment]
+        out = _clone_without_noise(soup)
+        assert "keep" in out.get_text()
 
 
 class TestExtractionHelpers:
