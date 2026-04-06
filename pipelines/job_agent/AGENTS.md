@@ -5,7 +5,8 @@ Job search automation pipeline. Discovers listings, filters by criteria, tailors
 ## Pipeline flow
 
 ```
-Discovery → Filtering → Tailoring → Human Review → Application → Tracking → Notification
+Default: Discovery → Filtering → Tailoring → Human Review → Application → Tracking → Notification
+Manual:  Manual Extraction (URL) → Tailoring → Tracking → Notification
 ```
 
 ## Current status
@@ -13,6 +14,7 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 | Node | Status | Notes |
 |------|--------|-------|
 | Discovery | **Stub** | Returns empty list. M2: real scraping via `BrowserManager` + `structured_complete` |
+| Manual Extraction (URL) | **Implemented** | Fetches a single direct job URL and emits one canonical `JobListing` into `qualified_listings` |
 | Filtering | **Implemented** | Salary floor filter. Keyword/role filters planned. |
 | Tailoring | **Implemented** | Multi-phase LLM resume tailoring → `.docx`. See below. |
 | Human Review | **Planned (M4)** | Email notification, approval gate |
@@ -29,6 +31,7 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 | `state.py` | `JobAgentState` dataclass + `PipelinePhase` enum |
 | `models/` | `JobListing` (SQLModel, persisted), `SearchCriteria` / `JobFilter` (Pydantic, transient) |
 | `nodes/` | One file per node — pure `async (state) -> state` functions |
+| `extraction/` | Layered URL extraction helpers (structured metadata, provider-aware parsing, generic fallback) |
 | `resume/` | Tailoring subsystem: profile loading, plan application, `.docx` rendering |
 | `prompts/` | Markdown templates with `{placeholder}` format strings |
 | `context/candidate_profile.yaml` | Structured candidate data consumed by the Tailoring node (gitignored) |
@@ -39,6 +42,7 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 
 - **Nodes are pure functions:** `async def node(state: JobAgentState) -> JobAgentState`. No side effects beyond logging and DB writes.
 - **State is centralized:** add new pipeline data to `JobAgentState` in `state.py`, not to individual nodes.
+- **Manual URL runs:** set `state.manual_job_url` and use `build_manual_graph()` for direct URL workflows.
 - **Models are split by persistence:** `JobListing` is a DB table (`SQLModel, table=True`). `SearchCriteria` and `JobFilter` are transient Pydantic models. Don't mix these patterns.
 - **Never auto-submit.** The pipeline must pause for human approval before application submission. This is a hard product constraint.
 - **Anti-detection is mandatory.** All browser interactions go through `core.browser.BrowserManager`. Use `rate_limited_goto()` and `human_delay()`. Never raw Playwright.

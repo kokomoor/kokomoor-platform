@@ -38,6 +38,7 @@ class JobAgentState:
 
     # Input
     search_criteria: SearchCriteria = field(default_factory=SearchCriteria)
+    manual_job_url: str = ""
 
     # Pipeline progress
     phase: PipelinePhase = PipelinePhase.DISCOVERY

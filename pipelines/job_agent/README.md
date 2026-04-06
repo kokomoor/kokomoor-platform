@@ -7,7 +7,8 @@ Automates job search, resume/cover letter tailoring, and application tracking.
 ## Pipeline Flow
 
 ```
-Discovery → Filtering → Tailoring → Human Review → Application → Tracking → Notification
+Default: Discovery → Filtering → Tailoring → Human Review → Application → Tracking → Notification
+Manual:  Manual Extraction (URL) → Tailoring → Tracking → Notification
 ```
 
 ### Nodes
@@ -15,6 +16,7 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 | Node | Status | Description |
 |------|--------|-------------|
 | Discovery | Stub | Scrape job boards via Playwright |
+| Manual Extraction (URL) | **Implemented** | Fetch direct job URL, extract and normalize a canonical `JobListing` |
 | Filtering | Implemented | Salary floor, keyword, dedup filters |
 | Tailoring | **Implemented** | Multi-phase LLM resume tailoring → `.docx` |
 | Human Review | Planned (M4) | Email notification, approval gate |
@@ -38,6 +40,12 @@ Output format matches the Kokomoor resume template (section borders, tab-aligned
 ```bash
 # From project root
 python -m pipelines.job_agent
+```
+
+Manual truncated flow (single direct URL):
+
+```bash
+python scripts/run_manual_url_tailor.py "https://company.com/careers/job-123"
 ```
 
 ### Testing

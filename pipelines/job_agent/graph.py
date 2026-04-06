@@ -21,6 +21,7 @@ from langgraph.graph.state import CompiledStateGraph, StateGraph
 
 from pipelines.job_agent.nodes.discovery import discovery_node
 from pipelines.job_agent.nodes.filtering import filtering_node
+from pipelines.job_agent.nodes.manual_extraction import manual_extraction_node
 from pipelines.job_agent.nodes.notification import notification_node
 from pipelines.job_agent.nodes.tailoring import tailoring_node
 from pipelines.job_agent.nodes.tracking import tracking_node
@@ -36,6 +37,14 @@ def _should_continue_after_filtering(state: JobAgentState) -> str:
     """Route after filtering: proceed to tailoring or skip to notification."""
     if not state.qualified_listings:
         logger.info("no_qualified_listings", total_discovered=len(state.discovered_listings))
+        return "notification"
+    return "tailoring"
+
+
+def _should_continue_after_manual_extraction(state: JobAgentState) -> str:
+    """Route after manual extraction: tailor if listing was extracted."""
+    if not state.qualified_listings:
+        logger.info("manual_extract_empty", errors=len(state.errors))
         return "notification"
     return "tailoring"
 
@@ -99,6 +108,43 @@ def build_graph(
         },
     )
 
+    graph.add_edge("tailoring", "tracking")
+    graph.add_edge("tracking", "notification")
+    graph.add_edge("notification", END)
+
+    return graph.compile()
+
+
+def build_manual_graph(
+    *,
+    llm_client: LLMClient | None = None,
+) -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobAgentState]:
+    """Construct a truncated graph for direct manual job URLs.
+
+    Flow:
+        START -> manual_extraction -> tailoring -> tracking -> notification -> END
+    """
+    graph: StateGraph[JobAgentState, None, JobAgentState, JobAgentState] = StateGraph(
+        JobAgentState,
+    )
+
+    async def _tailoring_wrapper(state: JobAgentState) -> JobAgentState:
+        return await tailoring_node(state, llm_client=llm_client)
+
+    graph.add_node("manual_extraction", manual_extraction_node)
+    graph.add_node("tailoring", _tailoring_wrapper)
+    graph.add_node("tracking", tracking_node)
+    graph.add_node("notification", notification_node)
+
+    graph.set_entry_point("manual_extraction")
+    graph.add_conditional_edges(
+        "manual_extraction",
+        _should_continue_after_manual_extraction,
+        {
+            "tailoring": "tailoring",
+            "notification": "notification",
+        },
+    )
     graph.add_edge("tailoring", "tracking")
     graph.add_edge("tracking", "notification")
     graph.add_edge("notification", END)
