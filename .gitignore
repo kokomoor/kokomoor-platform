@@ -47,5 +47,10 @@ Thumbs.db
 playwright-report/
 test-results/
 
-# Context
-context/
+# Local-only context (repo root: resumes, decks, transcripts)
+/context/
+
+# Job agent: private tailoring inputs under this directory (not pushed).
+# Tracked exception: candidate_profile.example.yaml (copy to candidate_profile.yaml locally).
+pipelines/job_agent/context/*
+!pipelines/job_agent/context/candidate_profile.example.yaml
