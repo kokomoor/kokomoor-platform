@@ -104,6 +104,22 @@ class Settings(BaseSettings):
     notification_from_email: str = ""
     notification_to_email: str = ""
 
+    # --- Resume Tailoring ---
+    resume_master_profile_path: str = Field(
+        default=str(
+            _PROJECT_ROOT / "pipelines" / "job_agent" / "context" / "candidate_profile.yaml"
+        ),
+        description="Path to the master resume profile YAML.",
+    )
+    resume_output_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "tailored_resumes"),
+        description="Directory for generated tailored resume .docx files.",
+    )
+    resume_enable_critique: bool = Field(
+        default=False,
+        description="Enable optional LLM critique pass after tailoring.",
+    )
+
     # --- Feature Flags ---
     enable_browser_stealth: bool = Field(
         default=True,

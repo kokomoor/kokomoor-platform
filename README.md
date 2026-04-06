@@ -19,10 +19,11 @@ kokomoor-platform/
 │   └── job_agent/           ← Pipeline 1: Job Application Agent
 │       ├── graph.py         LangGraph state machine
 │       ├── state.py         Typed pipeline state schema
-│       ├── models/          JobListing, Application, SearchCriteria
-│       ├── nodes/           Discovery → Filtering → Tailoring → Application → Tracking
-│       ├── tools/           Anthropic tool definitions (scraper, file generation)
+│       ├── models/          JobListing, SearchCriteria, resume tailoring models
+│       ├── nodes/           Discovery → Filtering → Tailoring → Tracking → Notification
+│       ├── resume/          Tailoring subsystem: profile loading, plan applier, .docx renderer
 │       ├── prompts/         Version-controlled prompt templates
+│       ├── context/         Candidate profile YAML (gitignored; example committed)
 │       └── tests/           Node-level tests with mocked externals
 │
 ├── alembic/                 ← Database migrations (shared across all pipelines)
@@ -47,6 +48,7 @@ kokomoor-platform/
 | Orchestration | LangGraph |
 | Browser | Playwright (async) |
 | Data | SQLModel + SQLite (Postgres-ready) |
+| Documents | python-docx (resume generation) |
 | Validation | Pydantic v2 |
 | Observability | structlog · LangSmith · Prometheus |
 | CI/CD | GitHub Actions |
@@ -90,13 +92,13 @@ docker compose up --build
 
 Automates the job search workflow:
 
-1. **Discovery** — Scrape job boards for relevant listings
-2. **Filtering** — Deduplicate and apply salary/role/keyword filters
-3. **Tailoring** — Generate customized resume + cover letter via Claude
-4. **Human Review** — Pause for approval before submission
-5. **Application** — Form-fill via Playwright
-6. **Tracking** — Persist state to database
-7. **Notification** — Email digest of pipeline activity
+1. **Discovery** — Scrape job boards for relevant listings (stub)
+2. **Filtering** — Deduplicate and apply salary/role/keyword filters (implemented)
+3. **Tailoring** — Multi-phase LLM resume tailoring: job analysis → tailoring plan → deterministic apply → `.docx` render (implemented)
+4. **Human Review** — Pause for approval before submission (planned)
+5. **Application** — Form-fill via Playwright (planned)
+6. **Tracking** — Persist state to database (stub)
+7. **Notification** — Email digest of pipeline activity (stub)
 
 See [`pipelines/job_agent/README.md`](pipelines/job_agent/README.md) for details.
 

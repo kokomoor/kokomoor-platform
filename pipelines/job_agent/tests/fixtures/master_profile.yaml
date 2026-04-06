@@ -1,0 +1,69 @@
+# Minimal test fixture for ResumeMasterProfile.
+# Covers all structural features: IDs, tags, variants, multiple sections.
+
+schema_version: 1
+
+name: Test Candidate
+location: Boston, MA
+email: test@example.com
+phone: "555-0100"
+linkedin: linkedin.com/in/test
+github: github.com/test
+clearance: "Test Clearance (active)"
+
+education:
+  - id: edu_test
+    school: Test University
+    degree: BS Computer Science
+    graduation: "2021"
+    gpa: "3.5"
+    bullets:
+      - id: edu_test_ml
+        text: "Machine learning research on time-series prediction using LSTMs"
+        tags: [ml, technical]
+      - id: edu_test_honors
+        text: "Dean's List all semesters, Phi Beta Kappa"
+        tags: [academic]
+
+experience:
+  - id: exp_alpha
+    company: Alpha Corp
+    title: Senior Engineer
+    dates: "2022-2024"
+    bullets:
+      - id: alpha_platform
+        text: "Led development of microservices platform serving 10M+ requests/day across 15 services"
+        tags: [technical, leadership, software]
+        variants:
+          short: "Led microservices platform (10M+ req/day)"
+      - id: alpha_cicd
+        text: "Reduced deployment time by 70% through CI/CD pipeline automation and infrastructure-as-code"
+        tags: [technical, devops]
+        variants:
+          short: "70% faster deployments via CI/CD"
+      - id: alpha_mentoring
+        text: "Mentored 4 junior engineers on distributed systems design and code review practices"
+        tags: [leadership, mentoring]
+      - id: alpha_ml
+        text: "Built ML-powered anomaly detection system reducing incident response time by 40%"
+        tags: [ml, technical]
+
+  - id: exp_beta
+    company: Beta Inc
+    title: Software Engineer
+    dates: "2019-2022"
+    bullets:
+      - id: beta_pipeline
+        text: "Built real-time data pipeline processing 500K events/second with sub-100ms latency"
+        tags: [technical, data, software]
+        variants:
+          short: "Real-time pipeline (500K events/sec)"
+      - id: beta_fraud
+        text: "Implemented ML model for fraud detection achieving 95% precision at 80% recall"
+        tags: [ml, technical, finance]
+
+skills:
+  languages: [Python, Java, Go, SQL]
+  frameworks: [FastAPI, React, PyTorch]
+  domains: [FinTech, SaaS, ML/AI]
+  tools: [Docker, Kubernetes, AWS, Git]

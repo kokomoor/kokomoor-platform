@@ -15,7 +15,7 @@
 |-------|-------------|
 | **Discovery** | Scrape job boards, parse listings, deduplicate against DB. |
 | **Filtering** | Apply salary floor, keyword, and role filters. |
-| **Tailoring** | Generate customized resume + cover letter via LLM. |
+| **Tailoring** | Multi-phase LLM pipeline: job analysis → tailoring plan → deterministic apply → `.docx` render. Uses `structured_complete` for each LLM pass; the applier and renderer are pure code. |
 | **Human Review** | Pause pipeline, notify owner, wait for approval. |
 | **Application** | Fill and submit forms via Playwright. |
 | **Tracking** | Persist listing states to database. |
@@ -27,6 +27,16 @@
 |-------|------|-----------|---------|
 | **SQLModel table** | `SQLModel, table=True` | Yes (DB) | `JobListing`, `PipelineRun` |
 | **Pydantic model** | `pydantic.BaseModel` | No (transient) | `SearchCriteria`, `JobFilter` |
+| **Resume tailoring model** | `pydantic.BaseModel` | No (transient) | `ResumeMasterProfile`, `JobAnalysisResult`, `ResumeTailoringPlan`, `TailoredResumeDocument` |
+
+## Resume tailoring concepts
+
+| Term | Definition |
+|------|-----------|
+| **Master profile** | YAML file (`candidate_profile.yaml`) with all possible resume content. Each bullet has a stable `id`, `tags`, and optional `variants` (short/long). |
+| **Bullet op** | An operation applied to a single bullet: `keep` (use as-is), `shorten` (use short variant), or `rewrite` (LLM-provided replacement text). |
+| **Tailoring plan** | LLM-generated structured plan specifying bullet selection, ordering, and ops for a specific job listing. |
+| **Applier** | Pure function that resolves a tailoring plan against the master profile to produce a `TailoredResumeDocument`. No LLM calls. |
 
 ## LLM layer
 

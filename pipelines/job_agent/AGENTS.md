@@ -14,7 +14,7 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 |------|--------|-------|
 | Discovery | **Stub** | Returns empty list. M2: real scraping via `BrowserManager` + `structured_complete` |
 | Filtering | **Implemented** | Salary floor filter. Keyword/role filters planned. |
-| Tailoring | **Planned (M3)** | Claude-generated resume + cover letter |
+| Tailoring | **Implemented** | Multi-phase LLM resume tailoring → `.docx`. See below. |
 | Human Review | **Planned (M4)** | Email notification, approval gate |
 | Application | **Planned (M4)** | Playwright form-fill |
 | Tracking | **Stub** | Logs only. M2: upsert via `core.database` |
@@ -29,8 +29,9 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 | `state.py` | `JobAgentState` dataclass + `PipelinePhase` enum |
 | `models/` | `JobListing` (SQLModel, persisted), `SearchCriteria` / `JobFilter` (Pydantic, transient) |
 | `nodes/` | One file per node — pure `async (state) -> state` functions |
+| `resume/` | Tailoring subsystem: profile loading, plan application, `.docx` rendering |
 | `prompts/` | Markdown templates with `{placeholder}` format strings |
-| `context/candidate_profile.yaml` | Structured candidate data consumed by the Tailoring node |
+| `context/candidate_profile.yaml` | Structured candidate data consumed by the Tailoring node (gitignored) |
 | `tools/` | LLM tool definitions (currently empty) |
 | `tests/` | Unit tests with `MockLLMClient` and no real API calls |
 
@@ -43,12 +44,42 @@ Discovery → Filtering → Tailoring → Human Review → Application → Track
 - **Anti-detection is mandatory.** All browser interactions go through `core.browser.BrowserManager`. Use `rate_limited_goto()` and `human_delay()`. Never raw Playwright.
 - **Prefer APIs/aggregators** over scraping where available. Discovery should check RSS feeds or public APIs before falling back to browser scraping.
 
+## Resume tailoring architecture
+
+The tailoring node runs **inside a single LangGraph node** with multiple internal phases:
+
+1. **Job analysis** (`tailor_job_analysis.md`) — extract themes, seniority, domain tags from the JD. Output: `JobAnalysisResult`.
+2. **Tailoring plan** (`tailor_resume_plan.md`) — select/order/rewrite bullets using master-profile IDs. Output: `ResumeTailoringPlan`.
+3. **Apply plan** (`resume/applier.py`) — deterministic assembly: master profile + plan → `TailoredResumeDocument`.
+4. **Render .docx** (`resume/renderer.py`) — `TailoredResumeDocument` → styled Word document.
+
+Convention: **mutate listings in place** — set `tailored_resume_path` and `status` on each `JobListing`. After the node, `state.tailored_listings` aliases `state.qualified_listings` (same list, same object references).
+
+The master profile YAML uses **schema v1**: each bullet has a stable `id`, `tags` list, and optional `variants` dict (`short`/`long`). The LLM references IDs; the applier resolves them deterministically.
+
+### Resume models (`models/resume_tailoring.py`)
+
+| Model | Purpose |
+|-------|---------|
+| `ResumeMasterProfile` | Loaded from YAML — all possible bullets with IDs and tags |
+| `JobAnalysisResult` | LLM pass 1 output — themes, seniority, domain tags |
+| `ResumeTailoringPlan` | LLM pass 2 output — bullet selection, ordering, ops |
+| `TailoredResumeDocument` | Post-application structure, input to `.docx` renderer |
+
+### Resume package (`resume/`)
+
+| File | Role |
+|------|------|
+| `profile.py` | Load YAML → `ResumeMasterProfile`; format profile text for LLM |
+| `applier.py` | Pure function: `(profile, plan) → TailoredResumeDocument` |
+| `renderer.py` | `TailoredResumeDocument → .docx` with Calibri styling |
+
 ## Prompt templates
 
 Templates in `prompts/` use `{placeholder}` syntax:
-- `{candidate_profile}` — from `context/candidate_profile.yaml`
-- `{job_title}`, `{company}`, `{job_description}` — from `JobListing`
-- `{output_schema}` — Pydantic model JSON schema
+- `tailor_job_analysis.md` — `{job_title}`, `{company}`, `{job_description}`
+- `tailor_resume_plan.md` — `{job_analysis}`, `{candidate_profile_structured}`, `{positioning_rules}`
+- `tailor_cover_letter.md` — `{candidate_profile}`, `{job_title}`, `{company}`, `{job_description}`, `{output_schema}`
 
 The cover letter prompt defines a **quality benchmark**: direct, concrete, no filler, 250-400 words. Maintain this standard.
 
@@ -82,5 +113,7 @@ pytest pipelines/job_agent/tests/ -v
 
 - Importing `SearchCriteria` from `state` instead of `models` — mypy will reject it (no implicit re-export).
 - Hardcoding salary floor in node logic — use `state.search_criteria.salary_floor`.
-- Adding graph wiring before the node exists — `graph.py` has commented TODOs for future nodes.
 - Forgetting to cast `graph.ainvoke()` result — LangGraph types it loosely; use `cast("JobAgentState", ...)`.
+- Referencing bullet IDs in prompts or tests that don't exist in the master profile — validate against `ResumeMasterProfile.all_bullet_ids()`.
+- Using `state.tailored_listings` without checking `tailored_resume_path` — some listings may have failed tailoring; check per-listing path before downstream processing.
+- Passing `llm_client` to `build_graph()` without `MockLLMClient` responses matching the expected call count — tailoring makes 2 calls per listing (analysis + plan).

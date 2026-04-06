@@ -38,3 +38,13 @@ Short records of key choices and their rationale. Reference these when asking "w
 
 **Choice:** Run everything on one Ubuntu box via Docker Compose. No cloud services.
 **Why:** Simplicity and cost. A personal automation tool doesn't need distributed infrastructure. The tower (Ubuntu Server 24.04, Tailscale SSH) is the deployment target.
+
+### D8: Multi-phase LLM tailoring over single-prompt generation
+
+**Choice:** Two small LLM passes (job analysis → tailoring plan) plus deterministic code (apply → render), instead of one large prompt that generates a full resume.
+**Why:** Cheaper (small structured JSON outputs vs full document text). More controllable — facts live in the master profile YAML, not in LLM output. Layout is owned by code (python-docx), not negotiated with the model. The applier and renderer are pure functions, fully testable without API calls.
+
+### D9: Code-based .docx rendering over template file
+
+**Choice:** Build resume documents programmatically with python-docx rather than filling a committed `.docx` template.
+**Why:** Fully deterministic — styling is defined in code, no binary files in git. Easier to test (no template file dependency). The `KP_RESUME_TEMPLATE_PATH` setting is reserved for a future user-supplied template if needed.

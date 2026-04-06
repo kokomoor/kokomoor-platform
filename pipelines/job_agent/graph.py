@@ -13,6 +13,8 @@ Usage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
 from langgraph.graph import END
 from langgraph.graph.state import CompiledStateGraph, StateGraph
@@ -20,8 +22,12 @@ from langgraph.graph.state import CompiledStateGraph, StateGraph
 from pipelines.job_agent.nodes.discovery import discovery_node
 from pipelines.job_agent.nodes.filtering import filtering_node
 from pipelines.job_agent.nodes.notification import notification_node
+from pipelines.job_agent.nodes.tailoring import tailoring_node
 from pipelines.job_agent.nodes.tracking import tracking_node
 from pipelines.job_agent.state import JobAgentState
+
+if TYPE_CHECKING:
+    from core.llm.protocol import LLMClient
 
 logger = structlog.get_logger(__name__)
 
@@ -41,15 +47,23 @@ def _should_continue_after_review(state: JobAgentState) -> str:
     return "application"
 
 
-def build_graph() -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobAgentState]:
+def build_graph(
+    *,
+    llm_client: LLMClient | None = None,
+) -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobAgentState]:
     """Construct and compile the job agent LangGraph.
+
+    Args:
+        llm_client: Optional LLM client for the tailoring node.
+            Defaults to ``AnthropicClient()`` at runtime if not provided.
+            Pass ``MockLLMClient`` in tests.
 
     Returns a compiled graph ready for ``ainvoke()`` or ``astream()``.
 
     The graph implements this flow::
 
-        START → discovery → filtering → tailoring → human_review
-              → application → tracking → notification → END
+        START → discovery → filtering → tailoring → tracking
+              → notification → END
 
     With conditional edges that skip stages when there's nothing to
     process (e.g., no qualified listings skip tailoring entirely).
@@ -58,11 +72,13 @@ def build_graph() -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobA
         JobAgentState,
     )
 
+    async def _tailoring_wrapper(state: JobAgentState) -> JobAgentState:
+        return await tailoring_node(state, llm_client=llm_client)
+
     # Register nodes.
     graph.add_node("discovery", discovery_node)
     graph.add_node("filtering", filtering_node)
-    # TODO: Milestone 3 — uncomment when tailoring node is implemented.
-    # graph.add_node("tailoring", tailoring_node)
+    graph.add_node("tailoring", _tailoring_wrapper)
     # TODO: Milestone 4 — uncomment when these nodes are implemented.
     # graph.add_node("human_review", human_review_node)
     # graph.add_node("application", application_node)
@@ -78,11 +94,12 @@ def build_graph() -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobA
         "filtering",
         _should_continue_after_filtering,
         {
-            "tailoring": "tracking",  # Temporarily route to tracking until tailoring exists.
+            "tailoring": "tailoring",
             "notification": "notification",
         },
     )
 
+    graph.add_edge("tailoring", "tracking")
     graph.add_edge("tracking", "notification")
     graph.add_edge("notification", END)
 
