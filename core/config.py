@@ -104,6 +104,44 @@ class Settings(BaseSettings):
     notification_from_email: str = ""
     notification_to_email: str = ""
 
+    # --- Resume Tailoring ---
+    resume_master_profile_path: str = Field(
+        default=str(
+            _PROJECT_ROOT / "pipelines" / "job_agent" / "context" / "candidate_profile.yaml"
+        ),
+        description="Path to the master resume profile YAML.",
+    )
+    resume_output_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "tailored_resumes"),
+        description="Directory for generated tailored resume .docx files.",
+    )
+    resume_enable_critique: bool = Field(
+        default=False,
+        description="Enable optional LLM critique pass after tailoring.",
+    )
+    resume_analysis_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Model for the job-analysis pass (cheap, structured extraction).",
+    )
+    resume_plan_model: str = Field(
+        default="",
+        description="Model for the tailoring-plan pass. Empty = use default anthropic_model.",
+    )
+    resume_analysis_max_tokens: int = Field(
+        default=1024,
+        ge=256,
+        description="Max output tokens for the job-analysis LLM call.",
+    )
+    resume_plan_max_tokens: int = Field(
+        default=2048,
+        ge=512,
+        description="Max output tokens for the tailoring-plan LLM call.",
+    )
+    resume_enable_analysis_cache: bool = Field(
+        default=True,
+        description="Cache job-analysis results in memory by dedup_key within a run.",
+    )
+
     # --- Feature Flags ---
     enable_browser_stealth: bool = Field(
         default=True,

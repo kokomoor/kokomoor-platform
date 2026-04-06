@@ -66,9 +66,10 @@ pipelines/<name>/
 ├── state.py             Typed state dataclass
 ├── models/              SQLModel + Pydantic models
 ├── nodes/               Pure functions: (state) -> state
+├── resume/              [job_agent] Tailoring subsystem: profile, applier, renderer
 ├── prompts/             Markdown prompt templates
 ├── tests/               Unit tests with mocked externals
-├── context/             Pipeline-specific reference data
+├── context/             Pipeline-specific reference data (gitignored)
 └── Dockerfile
 ```
 

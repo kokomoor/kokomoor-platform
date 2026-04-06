@@ -41,6 +41,7 @@ async def structured_complete(
     response_model: type[T],
     max_retries: int = 2,
     model: str | None = None,
+    max_tokens: int = 4096,
     run_id: str = "",
 ) -> T:
     """Request a structured response from Claude and validate it.
@@ -55,6 +56,7 @@ async def structured_complete(
         response_model: A Pydantic model class to validate against.
         max_retries: Number of retry attempts on validation failure.
         model: Optional model override.
+        max_tokens: Maximum tokens in the response.
         run_id: Pipeline run identifier for log correlation.
 
     Returns:
@@ -79,6 +81,7 @@ async def structured_complete(
             full_prompt + retry_context,
             system=_STRUCTURED_SYSTEM_PROMPT,
             model=model,
+            max_tokens=max_tokens,
             run_id=run_id,
         )
 
