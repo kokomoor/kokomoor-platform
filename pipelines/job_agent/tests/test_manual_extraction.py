@@ -68,6 +68,48 @@ class TestExtractionHelpers:
 
 
 class TestExtractionFromHtml:
+    def test_raw_cleaned_best_description_fields(self) -> None:
+        html = """
+        <html><body>
+          <h1>Role</h1>
+          <main>
+            <h2>Responsibilities</h2>
+            <p>Lead delivery.</p>
+            <p>Lead delivery.</p>
+          </main>
+        </body></html>
+        """
+        data = extract_job_data_from_html("https://careers.example.com/jobs/role", html)
+        assert data.raw_description
+        assert data.cleaned_description
+        assert data.best_description == data.cleaned_description
+        assert data.normalized_description == data.cleaned_description
+        assert len(data.cleaned_description) <= len(data.raw_description)
+
+    def test_prefers_richer_visible_block_over_sparse_structured(self) -> None:
+        html = """
+        <html><head>
+          <script type="application/ld+json">
+            {"@type":"JobPosting","title":"Program Manager","description":"Great role."}
+          </script>
+        </head><body>
+          <h1>Program Manager</h1>
+          <div class="job-description">
+            <h2>Responsibilities</h2>
+            <ul><li>Lead planning</li><li>Own roadmap</li></ul>
+            <h2>Basic Qualifications</h2>
+            <ul><li>7+ years experience</li></ul>
+            <h2>Preferred Qualifications</h2>
+            <ul><li>MBA preferred</li></ul>
+          </div>
+        </body></html>
+        """
+        data = extract_job_data_from_html("https://careers.example.com/jobs/pm", html)
+        desc = data.cleaned_description.lower()
+        assert "basic qualifications" in desc
+        assert "preferred qualifications" in desc
+        assert data.metadata["extraction_mode"] in {"provider", "generic"}
+
     def test_jsonld_extraction(self) -> None:
         data = extract_job_data_from_html(
             "https://acme.example/jobs/123",
@@ -102,6 +144,21 @@ class TestExtractionFromHtml:
         assert data.salary_max == 260000
         assert data.metadata["remote_mode"] == "hybrid"
         assert data.remote is None
+        assert data.company == "Example Company"
+
+    def test_generic_company_extraction_from_title_pattern(self) -> None:
+        html = """
+        <html><head><title>Program Director - Orbital Systems</title></head>
+        <body>
+          <h1>Program Director - Orbital Systems</h1>
+          <main>
+            <h2>Responsibilities</h2>
+            <p>Own cross-functional delivery and hiring plans.</p>
+          </main>
+        </body></html>
+        """
+        data = extract_job_data_from_html("https://careers.orbital.example/jobs/1", html)
+        assert data.company == "Orbital Systems"
 
     def test_amazon_like_captures_qualifications(self) -> None:
         data = extract_job_data_from_html(
@@ -139,7 +196,8 @@ class TestManualExtractionNode:
                 canonical_url="https://example.com/jobs/abc",
                 source=JobSource.OTHER,
                 raw_description="Raw text",
-                normalized_description="Normalized text",
+                cleaned_description="Normalized text",
+                best_description="Normalized text",
                 salary_min=200000,
                 salary_max=240000,
                 remote=False,
@@ -163,6 +221,27 @@ class TestManualExtractionNode:
         assert len(out.discovered_listings) == 1
         assert len(out.qualified_listings) == 1
         assert out.qualified_listings[0].description == "Normalized text"
+        assert out.qualified_listings[0].notes is not None
+        assert "raw_description" in out.qualified_listings[0].notes
+        assert out.errors == []
+
+    @pytest.mark.asyncio
+    async def test_manual_node_dry_run_skips_network(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _boom(_: str) -> ExtractedJobData:
+            raise AssertionError("extract should not run in dry_run")
+
+        monkeypatch.setattr(
+            "pipelines.job_agent.nodes.manual_extraction.extract_job_data_from_url",
+            _boom,
+        )
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            manual_job_url="https://example.com/jobs/abc",
+            run_id="manual-test",
+            dry_run=True,
+        )
+        out = await manual_extraction_node(state)
+        assert out.qualified_listings == []
         assert out.errors == []
 
     @pytest.mark.asyncio
@@ -235,3 +314,87 @@ class TestExtractedJobMarkdown:
         assert "Clearance" in text
         assert "senior" in text
         assert "defense to product" in text
+
+
+class TestExtractionFromUrlFlow:
+    @pytest.mark.asyncio
+    async def test_provider_detection_uses_resolved_final_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from core.fetch.types import FetchMethod, FetchResult
+        from pipelines.job_agent.extraction.manual_job_extractor import extract_job_data_from_url
+
+        class _HttpStub:
+            async def fetch(self, url: str) -> FetchResult:
+                return FetchResult(
+                    html=_fixture("job_page_generic.html"),
+                    final_url="https://boards.greenhouse.io/acme/jobs/123",
+                    status_code=200,
+                    method=FetchMethod.HTTP,
+                )
+
+        monkeypatch.setattr(
+            "pipelines.job_agent.extraction.manual_job_extractor.HttpFetcher",
+            _HttpStub,
+        )
+        data = await extract_job_data_from_url("https://acme.com/careers/job-123")
+        assert data.source == JobSource.GREENHOUSE
+        assert data.metadata["resolved_provider"] == "greenhouse"
+
+    @pytest.mark.asyncio
+    async def test_browser_fallback_prefers_higher_quality_not_length(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from core.fetch.types import FetchMethod, FetchResult
+        from pipelines.job_agent.extraction.manual_job_extractor import extract_job_data_from_url
+
+        low_quality_long = "<html><body>" + ("apply now " * 800) + "</body></html>"
+        high_quality_shorter = """
+        <html><body><h1>Program Manager</h1>
+        <div><h2>Responsibilities</h2><ul><li>Lead planning</li></ul>
+        <h2>Basic Qualifications</h2><ul><li>7+ years</li></ul>
+        <h2>Preferred Qualifications</h2><ul><li>MBA</li></ul></div>
+        </body></html>
+        """
+
+        class _HttpStub:
+            async def fetch(self, url: str) -> FetchResult:
+                return FetchResult(
+                    html=low_quality_long,
+                    final_url="https://careers.example.com/jobs/1",
+                    status_code=200,
+                    method=FetchMethod.HTTP,
+                )
+
+        class _BrowserStub:
+            async def fetch(self, url: str) -> FetchResult:
+                return FetchResult(
+                    html=high_quality_shorter,
+                    final_url="https://careers.example.com/jobs/1",
+                    status_code=200,
+                    method=FetchMethod.BROWSER,
+                )
+
+        monkeypatch.setattr(
+            "pipelines.job_agent.extraction.manual_job_extractor.HttpFetcher",
+            _HttpStub,
+        )
+        monkeypatch.setattr(
+            "pipelines.job_agent.extraction.manual_job_extractor.BrowserFetcher",
+            _BrowserStub,
+        )
+
+        data = await extract_job_data_from_url("https://careers.example.com/jobs/1")
+        assert data.metadata["extraction_winner"] == "browser"
+        assert "basic qualifications" in data.cleaned_description.lower()
+
+
+class TestManualRunId:
+    def test_default_manual_run_id_is_unique_and_prefixed(self) -> None:
+        from scripts.run_manual_url_tailor import _default_run_id
+
+        run_id_1 = _default_run_id("https://example.com/jobs/1")
+        run_id_2 = _default_run_id("https://example.com/jobs/2")
+        assert run_id_1.startswith("manual-url-")
+        assert run_id_2.startswith("manual-url-")
+        assert run_id_1 != run_id_2

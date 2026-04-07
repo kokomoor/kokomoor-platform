@@ -18,29 +18,33 @@ class BrowserFetcher:
         self,
         *,
         post_wait_ms: int | None = None,
+        timeout_ms: int | None = None,
     ) -> None:
         settings = get_settings()
         self._post_wait_ms = (
             post_wait_ms if post_wait_ms is not None else settings.fetch_browser_post_wait_ms
         )
+        self._timeout_ms = timeout_ms if timeout_ms is not None else settings.fetch_browser_timeout_ms
 
     async def fetch(self, url: str) -> FetchResult:
         """Navigate to *url*, wait briefly for JS, return ``page.content()``."""
         async with BrowserManager() as browser:
             page = await browser.new_page()
-            await browser.rate_limited_goto(page, url)
+            response = await browser.rate_limited_goto(page, url, timeout_ms=self._timeout_ms)
             if self._post_wait_ms > 0:
                 await page.wait_for_timeout(self._post_wait_ms)
             html = await page.content()
             final_url = page.url
+            status_code = response.status if response is not None else 200
             logger.info(
                 "fetch_browser_complete",
                 url=final_url,
                 method=FetchMethod.BROWSER.value,
+                status=status_code,
             )
             return FetchResult(
                 html=html,
                 final_url=final_url,
-                status_code=200,
+                status_code=status_code,
                 method=FetchMethod.BROWSER,
             )

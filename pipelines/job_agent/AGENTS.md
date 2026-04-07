@@ -46,11 +46,13 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 - **Nodes are pure functions:** `async def node(state: JobAgentState) -> JobAgentState`. No side effects beyond logging and DB writes.
 - **State is centralized:** add new pipeline data to `JobAgentState` in `state.py`, not to individual nodes.
 - **Manual URL runs:** set `state.manual_job_url` and use `build_manual_graph()` for direct URL workflows.
+- **Dry run semantics:** dry runs avoid network and LLM side effects. Manual extraction intentionally returns no listings in dry run mode.
 - **Models are split by persistence:** `JobListing` is a DB table (`SQLModel, table=True`). `SearchCriteria` and `JobFilter` are transient Pydantic models. Don't mix these patterns.
 - **Schema ownership:** `JobAnalysisResult` lives in `models/resume_tailoring.py` — the shared contract between the job-analysis node (producer) and the tailoring node (consumer). Both import from the same module. If a future node needs the same analysis, it imports from the same place.
 - **Never auto-submit.** The pipeline must pause for human approval before application submission. This is a hard product constraint.
 - **Anti-detection is mandatory.** All browser interactions go through `core.browser.BrowserManager`. Use `rate_limited_goto()` and `human_delay()`. Never raw Playwright.
 - **Prefer APIs/aggregators** over scraping where available. Discovery should check RSS feeds or public APIs before falling back to browser scraping.
+- **Extractor contract:** map provider/source from resolved final URLs (post-redirect), score description candidates by quality (structured/provider/generic/fallback), and keep `JobListing.description` as cleaned canonical text.
 
 ## Job analysis node
 
@@ -59,7 +61,7 @@ Dedicated LangGraph node (`nodes/job_analysis.py`) that sits between extraction/
 - **Input:** full `JobListing.description` (up to `KP_JOB_ANALYSIS_MAX_INPUT_CHARS`, default 30k)
 - **Output:** `JobAnalysisResult` stored on `state.job_analyses[dedup_key]`
 - **Prompt:** `prompts/tailor_job_analysis.md`
-- **Caching:** by `dedup_key` within a run (configurable via `KP_JOB_ANALYSIS_ENABLE_CACHE`)
+- **Caching:** by `dedup_key + description hash` within a run (configurable via `KP_JOB_ANALYSIS_ENABLE_CACHE`)
 
 ### Why a separate node?
 
@@ -132,10 +134,11 @@ The renderer produces `.docx` files matching the Kokomoor resume template (Feb/S
 
 The manual run script (`scripts/run_manual_url_tailor.py`) writes two markdown files alongside the `.docx`:
 
-- `extracted_job_<prefix>.md` — full scraped description (untruncated, for verifying scraper output)
+- `extracted_job_<prefix>.md` — full canonical scraped description (untruncated, for verifying scraper output)
 - `job_analysis_<prefix>.md` — structured analysis (themes, quals, keywords — what the tailoring node uses)
 
 These are produced by `extraction/inspection.py`.
+Run IDs default to `manual-url-<timestamp>-<urlhash>` and can be overridden via CLI arg or `KP_MANUAL_RUN_ID`.
 
 ## Prompt templates
 
@@ -181,3 +184,4 @@ pytest pipelines/job_agent/tests/ -v
 - Using `state.tailored_listings` without checking `tailored_resume_path` — some listings may have failed tailoring; check per-listing path before downstream processing.
 - Tailoring node expects `state.job_analyses` to be pre-populated by the upstream job-analysis node. If a listing has no matching analysis, it is skipped with an error — not crashed.
 - Setting `KP_JOB_ANALYSIS_MODEL` to empty string means the analysis falls back to the default `KP_ANTHROPIC_MODEL` (Sonnet), which is more expensive. Only do this if Haiku quality is insufficient for a specific use case.
+- Analysis/tailoring failures now set `ApplicationStatus.ERRORED`; avoid logic that assumes all qualified listings become tailored.

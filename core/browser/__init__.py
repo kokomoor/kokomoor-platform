@@ -18,7 +18,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 import structlog
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, Response, async_playwright
 
 from core.browser.stealth import apply_stealth_defaults
 from core.config import get_settings
@@ -83,7 +83,13 @@ class BrowserManager:
             raise RuntimeError(msg)
         return await self._context.new_page()
 
-    async def rate_limited_goto(self, page: Page, url: str) -> None:
+    async def rate_limited_goto(
+        self,
+        page: Page,
+        url: str,
+        *,
+        timeout_ms: int | None = None,
+    ) -> Response | None:
         """Navigate to a URL with rate limiting between requests.
 
         Enforces a minimum delay between navigations to avoid triggering
@@ -99,5 +105,6 @@ class BrowserManager:
             await asyncio.sleep(wait)
 
         logger.info("page_navigate", url=url)
-        await page.goto(url, wait_until="domcontentloaded")
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         self._last_navigation = asyncio.get_event_loop().time()
+        return response

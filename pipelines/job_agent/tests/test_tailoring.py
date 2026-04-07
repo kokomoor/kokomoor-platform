@@ -568,6 +568,30 @@ class TestTailoringNode:
 
         assert len(result.errors) == 1
         assert "no job analysis" in result.errors[0]["message"].lower()
+        assert result.qualified_listings[0].status == ApplicationStatus.ERRORED
+
+    @pytest.mark.asyncio
+    async def test_sets_errored_status_when_tailoring_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("render failed")
+
+        monkeypatch.setattr("pipelines.job_agent.nodes.tailoring.render_resume_docx", _boom)
+        mock_client = MockLLMClient(responses=[_mock_plan_json()])
+        listing = _make_listing()
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing],
+            job_analyses={listing.dedup_key: _make_analysis()},
+            run_id="test-tailoring-error",
+        )
+        _patch_settings(tmp_path)
+        result = await tailoring_node(state, llm_client=mock_client)
+        assert result.errors
+        assert listing.status == ApplicationStatus.ERRORED
 
     @pytest.mark.asyncio
     async def test_one_llm_call_per_listing(self, tmp_path: Path) -> None:
