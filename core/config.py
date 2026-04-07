@@ -124,6 +124,26 @@ class Settings(BaseSettings):
     notification_from_email: str = ""
     notification_to_email: str = ""
 
+    # --- Job Analysis Node ---
+    job_analysis_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Model for the job-analysis node (structured JD extraction).",
+    )
+    job_analysis_max_tokens: int = Field(
+        default=2048,
+        ge=256,
+        description="Max output tokens for the job-analysis LLM call.",
+    )
+    job_analysis_max_input_chars: int = Field(
+        default=30_000,
+        ge=2000,
+        description="Safety cap on JD character length sent to job-analysis LLM.",
+    )
+    job_analysis_enable_cache: bool = Field(
+        default=True,
+        description="Cache job-analysis results in memory by dedup_key within a run.",
+    )
+
     # --- Resume Tailoring ---
     resume_master_profile_path: str = Field(
         default=str(
@@ -139,27 +159,14 @@ class Settings(BaseSettings):
         default=False,
         description="Enable optional LLM critique pass after tailoring.",
     )
-    resume_analysis_model: str = Field(
-        default="claude-haiku-4-5-20251001",
-        description="Model for the job-analysis pass (cheap, structured extraction).",
-    )
     resume_plan_model: str = Field(
         default="",
         description="Model for the tailoring-plan pass. Empty = use default anthropic_model.",
-    )
-    resume_analysis_max_tokens: int = Field(
-        default=1024,
-        ge=256,
-        description="Max output tokens for the job-analysis LLM call.",
     )
     resume_plan_max_tokens: int = Field(
         default=2048,
         ge=512,
         description="Max output tokens for the tailoring-plan LLM call.",
-    )
-    resume_enable_analysis_cache: bool = Field(
-        default=True,
-        description="Cache job-analysis results in memory by dedup_key within a run.",
     )
 
     # --- Feature Flags ---

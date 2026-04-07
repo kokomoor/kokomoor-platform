@@ -8,6 +8,10 @@ from typing import cast
 import pytest
 from bs4 import BeautifulSoup
 
+from pipelines.job_agent.extraction.inspection import (
+    write_extracted_job_markdown,
+    write_job_analysis_markdown,
+)
 from pipelines.job_agent.extraction.manual_job_extractor import (
     ExtractedJobData,
     _clone_without_noise,
@@ -18,7 +22,8 @@ from pipelines.job_agent.extraction.manual_job_extractor import (
     map_provider_to_source,
 )
 from pipelines.job_agent.graph import build_manual_graph
-from pipelines.job_agent.models import JobSource, SearchCriteria
+from pipelines.job_agent.models import JobListing, JobSource, SearchCriteria
+from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult
 from pipelines.job_agent.nodes.manual_extraction import manual_extraction_node
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
 
@@ -45,6 +50,7 @@ class TestExtractionHelpers:
         assert detect_provider("https://www.linkedin.com/jobs/view/123") == "linkedin"
         assert detect_provider("https://boards.greenhouse.io/acme/jobs/123") == "greenhouse"
         assert detect_provider("https://jobs.ashbyhq.com/acme/123") == "ashby"
+        assert detect_provider("https://www.amazon.jobs/en/jobs/3185564/foo") == "amazon"
 
     def test_source_mapping(self) -> None:
         assert map_provider_to_source("linkedin") == JobSource.LINKEDIN
@@ -96,6 +102,20 @@ class TestExtractionFromHtml:
         assert data.salary_max == 260000
         assert data.metadata["remote_mode"] == "hybrid"
         assert data.remote is None
+
+    def test_amazon_like_captures_qualifications(self) -> None:
+        data = extract_job_data_from_html(
+            "https://www.amazon.jobs/en/jobs/3185564/principal-product-manager",
+            _fixture("job_page_amazon_like.html"),
+        )
+        assert data.source == JobSource.COMPANY_SITE
+        desc = data.normalized_description.lower()
+        assert "basic qualifications" in desc
+        assert "preferred qualifications" in desc
+        assert "10+ years of end to end product delivery" in desc
+        assert "lead product definition" in desc
+        assert data.salary_min is not None
+        assert data.salary_max is not None
 
     def test_sparse_page_fallback(self) -> None:
         data = extract_job_data_from_html(
@@ -165,3 +185,53 @@ class TestManualExtractionNode:
         typed = cast("JobAgentState", final)
         assert typed.phase == PipelinePhase.COMPLETE
         assert typed.qualified_listings == []
+
+
+class TestExtractedJobMarkdown:
+    """Inspection outputs: full scraped description + structured analysis."""
+
+    def test_extracted_markdown_shows_full_description(self, tmp_path: Path) -> None:
+        listing = JobListing(
+            title="Engineer",
+            company="Acme Corp",
+            location="Boston, MA",
+            url="https://example.com/jobs/1",
+            source=JobSource.LINKEDIN,
+            description="Responsibilities line one.\nRequirements line two.",
+            dedup_key="a" * 32,
+        )
+        out = write_extracted_job_markdown(listing, run_id="run1", output_root=tmp_path)
+        assert out.parent == tmp_path / "run1"
+        text = out.read_text(encoding="utf-8")
+        assert "**Title:** Engineer" in text
+        assert "**Company:** Acme Corp" in text
+        assert "Responsibilities line one" in text
+        assert "Requirements line two" in text
+        assert "untruncated" in text.lower()
+
+    def test_analysis_markdown_shows_structured_output(self, tmp_path: Path) -> None:
+        listing = JobListing(
+            title="TPM",
+            company="Defense Co",
+            url="https://example.com/jobs/2",
+            source=JobSource.COMPANY_SITE,
+            description="Full job description here.",
+            dedup_key="b" * 32,
+        )
+        analysis = JobAnalysisResult(
+            themes=["autonomous systems"],
+            seniority="senior",
+            domain_tags=["defense"],
+            must_hit_keywords=["autonomous"],
+            priority_requirements=["5+ years"],
+            basic_qualifications=["BS in CS"],
+            preferred_qualifications=["Clearance"],
+            angles=["defense to product"],
+        )
+        out = write_job_analysis_markdown(listing, analysis, run_id="run1", output_root=tmp_path)
+        text = out.read_text(encoding="utf-8")
+        assert "autonomous systems" in text
+        assert "BS in CS" in text
+        assert "Clearance" in text
+        assert "senior" in text
+        assert "defense to product" in text

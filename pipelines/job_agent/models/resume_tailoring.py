@@ -119,14 +119,15 @@ class ResumeMasterProfile(BaseModel):
         return None
 
 
-# ── LLM Output: Job Analysis (Pass 1) ─────────────────────────────────
+# ── LLM Output: Job Analysis ──────────────────────────────────────────
 
 
 class JobAnalysisResult(BaseModel):
     """Structured extraction from a job description.
 
-    Produced by the first LLM pass — purely analyses the JD
-    without referencing the candidate profile.
+    Produced by the job-analysis node (dedicated LangGraph node).
+    Analyses the full JD without referencing the candidate profile.
+    Consumed by the tailoring node for plan generation.
     """
 
     themes: list[str]
@@ -134,6 +135,8 @@ class JobAnalysisResult(BaseModel):
     domain_tags: list[str]
     must_hit_keywords: list[str]
     priority_requirements: list[str]
+    basic_qualifications: list[str] = Field(default_factory=list)
+    preferred_qualifications: list[str] = Field(default_factory=list)
     angles: list[str]
 
 

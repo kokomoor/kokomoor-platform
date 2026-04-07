@@ -53,9 +53,6 @@ _NOISE_PHRASES = {
     "related jobs",
     "people also viewed",
     "report this job",
-    "about us",
-    "terms of service",
-    "equal opportunity employer",
 }
 
 _PROVIDER_SELECTORS: dict[str, list[str]] = {
@@ -87,6 +84,10 @@ _PROVIDER_SELECTORS: dict[str, list[str]] = {
     "ashby": [
         "[data-testid='job-posting-description']",
         ".job-posting-description",
+    ],
+    "amazon": [
+        ".job-detail-body-container",
+        "#job-detail-body",
     ],
 }
 
@@ -217,6 +218,8 @@ def detect_provider(url: str) -> str:
         return "workday"
     if "ashbyhq." in host:
         return "ashby"
+    if "amazon.jobs" in host:
+        return "amazon"
     return "company_site"
 
 
@@ -227,6 +230,7 @@ def map_provider_to_source(provider: str) -> JobSource:
         "greenhouse": JobSource.GREENHOUSE,
         "lever": JobSource.LEVER,
         "workday": JobSource.WORKDAY,
+        "amazon": JobSource.COMPANY_SITE,
         "company_site": JobSource.COMPANY_SITE,
     }.get(provider, JobSource.OTHER)
 
@@ -410,18 +414,27 @@ def _to_int(value: object) -> int | None:
 def _extract_provider_description(soup: BeautifulSoup, provider: str) -> str:
     selectors = _PROVIDER_SELECTORS.get(provider, [])
     for selector in selectors:
-        node = soup.select_one(selector)
-        if isinstance(node, Tag):
-            text = _node_to_text(node)
-            if len(text) >= 120:
-                return text
+        nodes = soup.select(selector)
+        if not nodes:
+            continue
+        parts: list[str] = []
+        for node in nodes:
+            if isinstance(node, Tag):
+                text = _node_to_text(node)
+                if text:
+                    parts.append(text)
+        merged = "\n\n".join(parts)
+        if len(merged) >= 120:
+            return merged
     return ""
 
 
 def _extract_generic_main_block(soup: BeautifulSoup) -> str:
+    """Find the richest content region, merging sibling sections that look job-related."""
     cleaned = _clone_without_noise(soup)
     candidates = cleaned.select("main, article, section, div")
-    best_text = ""
+
+    best_node: Tag | None = None
     best_score = -1
     for node in candidates:
         if not isinstance(node, Tag):
@@ -432,8 +445,21 @@ def _extract_generic_main_block(soup: BeautifulSoup) -> str:
         score = _score_candidate_block(text)
         if score > best_score:
             best_score = score
-            best_text = text
-    return best_text
+            best_node = node
+
+    if best_node is None:
+        return ""
+
+    parts = [_node_to_text(best_node)]
+    for sibling in best_node.find_next_siblings():
+        if not isinstance(sibling, Tag):
+            continue
+        sib_text = _node_to_text(sibling)
+        if len(sib_text) < 40:
+            continue
+        if _score_candidate_block(sib_text) > 0:
+            parts.append(sib_text)
+    return "\n\n".join(parts)
 
 
 def _extract_full_page_text(soup: BeautifulSoup) -> str:
@@ -507,6 +533,7 @@ def _extract_company(soup: BeautifulSoup, provider: str) -> str:
         "lever": [".posting-headline .company", ".main-header-text"],
         "workday": ["[data-automation-id='company']"],
         "ashby": [".ashby-job-posting-company"],
+        "amazon": [".job-company-name", "meta[property='og:site_name']"],
     }
     for selector in company_selectors.get(provider, []):
         node = soup.select_one(selector)
@@ -526,6 +553,8 @@ def _extract_location(soup: BeautifulSoup) -> str:
         "[data-qa='job-location']",
         ".job-details-jobs-unified-top-card__bullet",
         ".location",
+        ".location-icon + span",
+        ".location-and-id .location",
     ]
     for selector in location_selectors:
         node = soup.select_one(selector)
