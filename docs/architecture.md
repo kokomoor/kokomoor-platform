@@ -32,6 +32,7 @@ Settings (core/config.py)
 Database (core/database.py)         → AsyncEngine + async_sessionmaker → SQLite (Postgres-ready)
 LLM (core/llm/)                     → LLMClient protocol → AnthropicClient (or future providers)
 Browser (core/browser/)             → BrowserManager → Playwright + stealth + rate limiting
+Fetch (core/fetch/)                 → HttpFetcher + BrowserFetcher → shared HTML transport
 Observability (core/observability/) → structlog (JSON/console) + Prometheus metrics
 Notifications (core/notifications/) → Async SMTP
 ```

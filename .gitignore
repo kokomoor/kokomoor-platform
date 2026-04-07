@@ -29,6 +29,7 @@ data/*.db-journal
 # Generated files
 *.pdf
 output/
+data/tailored_resumes/
 
 # Docker
 .docker/

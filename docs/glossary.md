@@ -15,7 +15,8 @@
 |-------|-------------|
 | **Discovery** | Scrape job boards, parse listings, deduplicate against DB. |
 | **Filtering** | Apply salary floor, keyword, and role filters. |
-| **Tailoring** | Multi-phase LLM pipeline: job analysis → tailoring plan → deterministic apply → `.docx` render. Uses `structured_complete` for each LLM pass; the applier and renderer are pure code. |
+| **Job Analysis** | Dedicated LLM node: full JD → structured `JobAnalysisResult` (themes, qualifications, keywords, domain tags). Runs between extraction/filtering and tailoring. |
+| **Tailoring** | Consumes pre-computed job analysis → tailoring plan → deterministic apply → `.docx` render. One LLM call (plan pass); the applier and renderer are pure code. |
 | **Human Review** | Pause pipeline, notify owner, wait for approval. |
 | **Application** | Fill and submit forms via Playwright. |
 | **Tracking** | Persist listing states to database. |

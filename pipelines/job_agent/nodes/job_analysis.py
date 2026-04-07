@@ -20,11 +20,11 @@ from core.config import get_settings
 from core.llm.structured import structured_complete
 from pipelines.job_agent.models import ApplicationStatus
 from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult
+from pipelines.job_agent.state import JobAgentState, PipelinePhase
 
 if TYPE_CHECKING:
     from core.llm.protocol import LLMClient
     from pipelines.job_agent.models import JobListing
-    from pipelines.job_agent.state import JobAgentState
 
 logger = structlog.get_logger(__name__)
 
@@ -40,6 +40,8 @@ async def job_analysis_node(
 
     Skips listings that already have a cached analysis (by ``dedup_key``).
     """
+    state.phase = PipelinePhase.JOB_ANALYSIS
+
     if state.dry_run:
         logger.info("job_analysis.skip_dry_run")
         return state
@@ -114,7 +116,7 @@ async def _analyse_listing(
         msg = f"Listing {listing.dedup_key} has empty description"
         raise ValueError(msg)
 
-    listing.status = ApplicationStatus.TAILORING
+    listing.status = ApplicationStatus.ANALYZING
 
     jd_text = listing.description[:max_input_chars]
 
