@@ -24,6 +24,7 @@ class ApplicationStatus(StrEnum):
 
     DISCOVERED = "discovered"
     FILTERED_OUT = "filtered_out"
+    ANALYZING = "analyzing"
     TAILORING = "tailoring"
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"

@@ -81,6 +81,26 @@ class Settings(BaseSettings):
         description="Minimum seconds between page navigations.",
     )
 
+    # --- HTTP / fetch (shared across pipelines) ---
+    fetch_http_timeout_seconds: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=300.0,
+        description="Timeout for httpx fetches in core.fetch.HttpFetcher.",
+    )
+    fetch_http_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description="Retry count for failed HTTP fetches (after first attempt).",
+    )
+    fetch_browser_post_wait_ms: int = Field(
+        default=1500,
+        ge=0,
+        le=30_000,
+        description="Milliseconds to wait after navigation before reading page HTML (browser fetch).",
+    )
+
     # --- Observability ---
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_json: bool = Field(
@@ -104,6 +124,26 @@ class Settings(BaseSettings):
     notification_from_email: str = ""
     notification_to_email: str = ""
 
+    # --- Job Analysis Node ---
+    job_analysis_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Model for the job-analysis node (structured JD extraction).",
+    )
+    job_analysis_max_tokens: int = Field(
+        default=2048,
+        ge=256,
+        description="Max output tokens for the job-analysis LLM call.",
+    )
+    job_analysis_max_input_chars: int = Field(
+        default=30_000,
+        ge=2000,
+        description="Safety cap on JD character length sent to job-analysis LLM.",
+    )
+    job_analysis_enable_cache: bool = Field(
+        default=True,
+        description="Cache job-analysis results in memory by dedup_key within a run.",
+    )
+
     # --- Resume Tailoring ---
     resume_master_profile_path: str = Field(
         default=str(
@@ -119,27 +159,14 @@ class Settings(BaseSettings):
         default=False,
         description="Enable optional LLM critique pass after tailoring.",
     )
-    resume_analysis_model: str = Field(
-        default="claude-haiku-4-5-20251001",
-        description="Model for the job-analysis pass (cheap, structured extraction).",
-    )
     resume_plan_model: str = Field(
         default="",
         description="Model for the tailoring-plan pass. Empty = use default anthropic_model.",
-    )
-    resume_analysis_max_tokens: int = Field(
-        default=1024,
-        ge=256,
-        description="Max output tokens for the job-analysis LLM call.",
     )
     resume_plan_max_tokens: int = Field(
         default=2048,
         ge=512,
         description="Max output tokens for the tailoring-plan LLM call.",
-    )
-    resume_enable_analysis_cache: bool = Field(
-        default=True,
-        description="Cache job-analysis results in memory by dedup_key within a run.",
     )
 
     # --- Feature Flags ---

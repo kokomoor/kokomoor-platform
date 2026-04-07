@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from pipelines.job_agent.models import JobListing, SearchCriteria
+from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult  # noqa: TC001
 
 
 class PipelinePhase(StrEnum):
@@ -18,6 +19,7 @@ class PipelinePhase(StrEnum):
 
     DISCOVERY = "discovery"
     FILTERING = "filtering"
+    JOB_ANALYSIS = "job_analysis"
     TAILORING = "tailoring"
     HUMAN_REVIEW = "human_review"
     APPLICATION = "application"
@@ -38,6 +40,7 @@ class JobAgentState:
 
     # Input
     search_criteria: SearchCriteria = field(default_factory=SearchCriteria)
+    manual_job_url: str = ""
 
     # Pipeline progress
     phase: PipelinePhase = PipelinePhase.DISCOVERY
@@ -45,8 +48,11 @@ class JobAgentState:
     # Discovery → Filtering
     discovered_listings: list[JobListing] = field(default_factory=list)
 
-    # Filtering → Tailoring
+    # Filtering → Job Analysis
     qualified_listings: list[JobListing] = field(default_factory=list)
+
+    # Job Analysis → Tailoring (keyed by listing dedup_key)
+    job_analyses: dict[str, JobAnalysisResult] = field(default_factory=dict)
 
     # Tailoring → Human Review
     tailored_listings: list[JobListing] = field(default_factory=list)

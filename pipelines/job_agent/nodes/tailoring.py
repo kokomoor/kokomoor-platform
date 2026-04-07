@@ -1,21 +1,15 @@
 """Tailoring node — generate per-listing tailored resumes.
 
-Runs a multi-phase LLM pipeline *inside* a single LangGraph node:
-1. **Job analysis** — extract themes, seniority, domain tags from the JD.
-2. **Tailoring plan** — select/order/rewrite bullets referencing master profile IDs.
-3. **Apply plan** — deterministic assembly from master profile + plan.
-4. **Render .docx** — write the tailored resume to disk.
+Consumes pre-computed ``JobAnalysisResult`` objects from
+``state.job_analyses`` (produced by the upstream job-analysis node)
+and runs the remaining pipeline phases:
+
+1. **Tailoring plan** — select/order/rewrite bullets referencing master profile IDs.
+2. **Apply plan** — deterministic assembly from master profile + plan.
+3. **Render .docx** — write the tailored resume to disk.
 
 Each listing is processed independently; a failure on one listing
 does not block the others.
-
-Cost optimizations (all behind config flags):
-- **Model split**: analysis pass uses a cheaper model (e.g. Haiku), plan uses Sonnet.
-- **Context pruning**: only profile bullets whose tags match the analysis domain
-  are sent to the plan pass, reducing input tokens.
-- **Analysis cache**: identical JDs (by dedup_key) reuse a cached analysis within
-  the same run, avoiding redundant LLM calls.
-- **Max-token caps**: per-phase output limits prevent oversized responses.
 """
 
 from __future__ import annotations
@@ -46,8 +40,6 @@ logger = structlog.get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-_JD_TRUNCATE_CHARS = 4000
-
 _ALWAYS_RELEVANT_TAGS = {"leadership", "technical", "general", "management", "software"}
 
 _TAG_EXPANSION: dict[str, list[str]] = {
@@ -75,8 +67,9 @@ async def tailoring_node(
 ) -> JobAgentState:
     """Tailor resumes for every listing in ``state.qualified_listings``.
 
-    Mutates listings in place (sets ``tailored_resume_path`` and
-    ``status``), then aliases ``tailored_listings`` to the same list.
+    Requires ``state.job_analyses`` to be populated by the upstream
+    job-analysis node. Listings without a matching analysis are skipped
+    with an error.
     """
     state.phase = PipelinePhase.TAILORING
 
@@ -101,31 +94,34 @@ async def tailoring_node(
     output_dir = Path(settings.resume_output_dir) / state.run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    analysis_template = (_PROMPTS_DIR / "tailor_job_analysis.md").read_text(encoding="utf-8")
     plan_template = (_PROMPTS_DIR / "tailor_resume_plan.md").read_text(encoding="utf-8")
-
-    analysis_model = settings.resume_analysis_model or None
     plan_model = settings.resume_plan_model or None
-    analysis_max_tokens = settings.resume_analysis_max_tokens
     plan_max_tokens = settings.resume_plan_max_tokens
 
-    analysis_cache: dict[str, JobAnalysisResult] = {}
-
     for listing in state.qualified_listings:
+        analysis = state.job_analyses.get(listing.dedup_key)
+        if analysis is None:
+            state.errors.append(
+                {
+                    "node": "tailoring",
+                    "dedup_key": listing.dedup_key,
+                    "message": "No job analysis found; job_analysis node may have failed.",
+                }
+            )
+            logger.warning("tailoring.missing_analysis", dedup_key=listing.dedup_key)
+            continue
+
         try:
             await _tailor_listing(
                 listing=listing,
+                analysis=analysis,
                 profile=profile,
                 llm_client=llm_client,
                 output_dir=output_dir,
-                analysis_template=analysis_template,
                 plan_template=plan_template,
                 run_id=state.run_id,
-                analysis_model=analysis_model,
                 plan_model=plan_model,
-                analysis_max_tokens=analysis_max_tokens,
                 plan_max_tokens=plan_max_tokens,
-                analysis_cache=analysis_cache if settings.resume_enable_analysis_cache else None,
             )
         except Exception as exc:
             state.errors.append(
@@ -151,7 +147,6 @@ async def tailoring_node(
         total=len(state.qualified_listings),
         tailored=tailored_count,
         errors=len(state.errors),
-        analysis_cache_size=len(analysis_cache),
     )
     return state
 
@@ -162,37 +157,18 @@ async def tailoring_node(
 async def _tailor_listing(
     *,
     listing: JobListing,
+    analysis: JobAnalysisResult,
     profile: ResumeMasterProfile,
     llm_client: LLMClient,
     output_dir: Path,
-    analysis_template: str,
     plan_template: str,
     run_id: str,
-    analysis_model: str | None,
     plan_model: str | None,
-    analysis_max_tokens: int,
     plan_max_tokens: int,
-    analysis_cache: dict[str, JobAnalysisResult] | None,
 ) -> None:
-    """Run the full analysis -> plan -> apply -> render pipeline for one listing."""
-    if not listing.description:
-        msg = f"Listing {listing.dedup_key} has empty description"
-        raise ValueError(msg)
-
+    """Run the plan -> apply -> render pipeline for one listing."""
     listing.status = ApplicationStatus.TAILORING
 
-    # Pass 1: Job Analysis (cheap model, cached by dedup_key)
-    analysis = await _get_or_run_analysis(
-        listing=listing,
-        llm_client=llm_client,
-        analysis_template=analysis_template,
-        run_id=run_id,
-        model=analysis_model,
-        max_tokens=analysis_max_tokens,
-        cache=analysis_cache,
-    )
-
-    # Build tag-filtered profile for the plan pass
     relevant_tags = _expand_domain_tags(analysis.domain_tags)
     profile_text = format_profile_for_llm(profile, relevant_tags=relevant_tags)
 
@@ -203,7 +179,6 @@ async def _tailor_listing(
         profile_chars=len(profile_text),
     )
 
-    # Pass 2: Tailoring Plan (full model, tag-filtered profile)
     plan_prompt = plan_template.format(
         job_analysis=analysis.model_dump_json(indent=2),
         candidate_profile_structured=profile_text,
@@ -224,7 +199,6 @@ async def _tailor_listing(
         bullet_ops=len(plan.bullet_ops),
     )
 
-    # Apply + Render (deterministic, no LLM cost)
     tailored_doc = apply_tailoring_plan(profile, plan)
 
     safe_name = _safe_filename(listing.company, listing.title, listing.dedup_key)
@@ -239,48 +213,6 @@ async def _tailor_listing(
         dedup_key=listing.dedup_key,
         path=str(out_path),
     )
-
-
-async def _get_or_run_analysis(
-    *,
-    listing: JobListing,
-    llm_client: LLMClient,
-    analysis_template: str,
-    run_id: str,
-    model: str | None,
-    max_tokens: int,
-    cache: dict[str, JobAnalysisResult] | None,
-) -> JobAnalysisResult:
-    """Return a cached analysis if available, otherwise run the LLM call."""
-    if cache is not None and listing.dedup_key in cache:
-        logger.info("tailoring.analysis_cache_hit", dedup_key=listing.dedup_key)
-        return cache[listing.dedup_key]
-
-    analysis_prompt = analysis_template.format(
-        job_title=listing.title,
-        company=listing.company,
-        job_description=listing.description[:_JD_TRUNCATE_CHARS],
-    )
-    analysis = await structured_complete(
-        llm_client,
-        analysis_prompt,
-        response_model=JobAnalysisResult,
-        model=model,
-        max_tokens=max_tokens,
-        run_id=run_id,
-    )
-    logger.info(
-        "tailoring.job_analysis",
-        dedup_key=listing.dedup_key,
-        themes=analysis.themes[:3],
-        seniority=analysis.seniority,
-        model_used=model or "default",
-    )
-
-    if cache is not None:
-        cache[listing.dedup_key] = analysis
-
-    return analysis
 
 
 # ── helpers ────────────────────────────────────────────────────────────

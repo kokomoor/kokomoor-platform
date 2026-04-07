@@ -1,8 +1,11 @@
 """Tests for the resume tailoring pipeline.
 
 Covers profile loading, plan application, .docx rendering, context
-pruning, analysis caching, model split, and the full tailoring node
-with MockLLMClient (no real API calls).
+pruning, tag expansion, and the tailoring node with MockLLMClient
+(no real API calls).
+
+The job analysis pass is now a separate upstream node; tailoring
+consumes pre-computed ``JobAnalysisResult`` from ``state.job_analyses``.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from core.testing import MockLLMClient
 from pipelines.job_agent.models import ApplicationStatus, JobListing, JobSource, SearchCriteria
 from pipelines.job_agent.models.resume_tailoring import (
     BulletOp,
+    JobAnalysisResult,
     ResumeMasterProfile,
     ResumeTailoringPlan,
     SectionPlan,
@@ -90,16 +94,16 @@ def _make_listing(
     )
 
 
-def _mock_analysis_json() -> str:
-    return json.dumps(
-        {
-            "themes": ["autonomous systems", "defense technology", "product leadership"],
-            "seniority": "senior",
-            "domain_tags": ["defense", "tech", "product"],
-            "must_hit_keywords": ["autonomous", "defense", "product management"],
-            "priority_requirements": ["5+ years engineering", "defense background"],
-            "angles": ["defense engineering to product", "technical depth"],
-        }
+def _make_analysis() -> JobAnalysisResult:
+    return JobAnalysisResult(
+        themes=["autonomous systems", "defense technology", "product leadership"],
+        seniority="senior",
+        domain_tags=["defense", "tech", "product"],
+        must_hit_keywords=["autonomous", "defense", "product management"],
+        priority_requirements=["5+ years engineering", "defense background"],
+        basic_qualifications=["BS in CS or equivalent"],
+        preferred_qualifications=["Clearance preferred"],
+        angles=["defense engineering to product", "technical depth"],
     )
 
 
@@ -323,7 +327,7 @@ class TestApplier:
         assert len(doc.experience[0].bullets) == 0
 
     def test_shorten_without_variant_falls_back(self, master_profile: ResumeMasterProfile) -> None:
-        """Shorten op on a bullet with no short variant → keeps original text."""
+        """Shorten op on a bullet with no short variant -> keeps original text."""
         plan = ResumeTailoringPlan(
             summary="Test.",
             experience_sections=[
@@ -340,7 +344,7 @@ class TestApplier:
 
     def test_normalizes_inline_dash_in_prose(self, master_profile: ResumeMasterProfile) -> None:
         plan = ResumeTailoringPlan(
-            summary="Summary with em dash — still fine.",
+            summary="Summary with em dash \u2014 still fine.",
             experience_sections=[
                 SectionPlan(section_id="exp_alpha", bullet_order=["alpha_platform"]),
             ],
@@ -349,14 +353,14 @@ class TestApplier:
                 BulletOp(
                     bullet_id="alpha_platform",
                     op="rewrite",
-                    rewrite_text="Rewritten bullet with em dash — remove it",
+                    rewrite_text="Rewritten bullet with em dash \u2014 remove it",
                 ),
             ],
             skills_to_highlight=[],
         )
         doc = apply_tailoring_plan(master_profile, plan)
-        assert "—" not in doc.summary
-        assert "—" not in doc.experience[0].bullets[0].text
+        assert "\u2014" not in doc.summary
+        assert "\u2014" not in doc.experience[0].bullets[0].text
         assert "; " in doc.summary
         assert "; " in doc.experience[0].bullets[0].text
 
@@ -490,16 +494,23 @@ class TestRenderer:
 
 
 class TestTailoringNode:
-    """Integration tests for the full tailoring node with MockLLMClient."""
+    """Integration tests for the tailoring node with MockLLMClient.
+
+    The tailoring node now expects ``state.job_analyses`` to be
+    pre-populated by the upstream job-analysis node. It only runs
+    the plan pass (1 LLM call per listing).
+    """
 
     @pytest.mark.asyncio
     async def test_tailors_qualified_listings(self, tmp_path: Path) -> None:
         from pipelines.job_agent.nodes.tailoring import tailoring_node
 
-        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
+        mock_client = MockLLMClient(responses=[_mock_plan_json()])
+        listing = _make_listing()
         state = JobAgentState(
             search_criteria=SearchCriteria(),
-            qualified_listings=[_make_listing()],
+            qualified_listings=[listing],
+            job_analyses={listing.dedup_key: _make_analysis()},
             run_id="test-run",
         )
 
@@ -510,7 +521,6 @@ class TestTailoringNode:
         assert result.tailored_listings is result.qualified_listings
         assert len(result.errors) == 0
 
-        listing = result.qualified_listings[0]
         assert listing.tailored_resume_path is not None
         assert Path(listing.tailored_resume_path).exists()
         assert listing.status == ApplicationStatus.PENDING_REVIEW
@@ -542,142 +552,58 @@ class TestTailoringNode:
         assert result.tailored_listings == []
 
     @pytest.mark.asyncio
-    async def test_handles_empty_description(self, tmp_path: Path) -> None:
+    async def test_errors_on_missing_analysis(self, tmp_path: Path) -> None:
+        """Listing without a matching analysis produces an error, not a crash."""
         from pipelines.job_agent.nodes.tailoring import tailoring_node
 
-        mock_client = MockLLMClient(responses=["{}"])
-        state = JobAgentState(
-            search_criteria=SearchCriteria(),
-            qualified_listings=[_make_listing(description="")],
-            run_id="test-empty-desc",
-        )
-        _patch_settings(tmp_path)
-        result = await tailoring_node(state, llm_client=mock_client)
-
-        assert len(result.errors) == 1
-        assert "empty description" in result.errors[0]["message"].lower()
-        assert result.qualified_listings[0].tailored_resume_path is None
-
-    @pytest.mark.asyncio
-    async def test_continues_after_single_failure(self, tmp_path: Path) -> None:
-        """First listing has bad description, second succeeds."""
-        from pipelines.job_agent.nodes.tailoring import tailoring_node
-
-        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
-        bad_listing = _make_listing(description="", dedup_key="bad_001")
-        good_listing = _make_listing(dedup_key="good_001")
-
-        state = JobAgentState(
-            search_criteria=SearchCriteria(),
-            qualified_listings=[bad_listing, good_listing],
-            run_id="test-partial",
-        )
-        _patch_settings(tmp_path)
-        result = await tailoring_node(state, llm_client=mock_client)
-
-        assert len(result.errors) == 1
-        assert result.errors[0]["dedup_key"] == "bad_001"
-        assert good_listing.tailored_resume_path is not None
-        assert bad_listing.tailored_resume_path is None
-
-    @pytest.mark.asyncio
-    async def test_llm_called_twice_per_listing(self, tmp_path: Path) -> None:
-        """Verify exactly 2 LLM calls per listing (analysis + plan)."""
-        from pipelines.job_agent.nodes.tailoring import tailoring_node
-
-        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
+        mock_client = MockLLMClient(responses=[])
         state = JobAgentState(
             search_criteria=SearchCriteria(),
             qualified_listings=[_make_listing()],
+            job_analyses={},
+            run_id="test-missing-analysis",
+        )
+        _patch_settings(tmp_path)
+        result = await tailoring_node(state, llm_client=mock_client)
+
+        assert len(result.errors) == 1
+        assert "no job analysis" in result.errors[0]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_one_llm_call_per_listing(self, tmp_path: Path) -> None:
+        """Only the plan pass calls the LLM (analysis is pre-computed)."""
+        from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+        mock_client = MockLLMClient(responses=[_mock_plan_json()])
+        listing = _make_listing()
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing],
+            job_analyses={listing.dedup_key: _make_analysis()},
             run_id="test-calls",
         )
         _patch_settings(tmp_path)
         await tailoring_node(state, llm_client=mock_client)
 
-        assert len(mock_client.calls) == 2
+        assert len(mock_client.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_analysis_uses_cheap_model(self, tmp_path: Path) -> None:
-        """Analysis pass should use the configured analysis model."""
+    async def test_plan_model_from_config(self, tmp_path: Path) -> None:
         from pipelines.job_agent.nodes.tailoring import tailoring_node
 
-        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
+        mock_client = MockLLMClient(responses=[_mock_plan_json()])
+        listing = _make_listing()
         state = JobAgentState(
             search_criteria=SearchCriteria(),
-            qualified_listings=[_make_listing()],
-            run_id="test-model-split",
-        )
-        _patch_settings(tmp_path, analysis_model="claude-haiku-4-5-20251001")
-        await tailoring_node(state, llm_client=mock_client)
-
-        analysis_call = mock_client.calls[0]
-        plan_call = mock_client.calls[1]
-        assert analysis_call[1]["model"] == "claude-haiku-4-5-20251001"
-        assert plan_call[1]["model"] is None  # uses client default
-
-    @pytest.mark.asyncio
-    async def test_max_tokens_passed_per_phase(self, tmp_path: Path) -> None:
-        """Each phase should use its own max_tokens cap."""
-        from pipelines.job_agent.nodes.tailoring import tailoring_node
-
-        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
-        state = JobAgentState(
-            search_criteria=SearchCriteria(),
-            qualified_listings=[_make_listing()],
-            run_id="test-max-tokens",
-        )
-        _patch_settings(tmp_path, analysis_max_tokens=512, plan_max_tokens=1024)
-        await tailoring_node(state, llm_client=mock_client)
-
-        assert mock_client.calls[0][1]["max_tokens"] == 512
-        assert mock_client.calls[1][1]["max_tokens"] == 1024
-
-    @pytest.mark.asyncio
-    async def test_analysis_cache_reuses_result(self, tmp_path: Path) -> None:
-        """Two listings with the same dedup_key should share a cached analysis."""
-        from pipelines.job_agent.nodes.tailoring import tailoring_node
-
-        mock_client = MockLLMClient(
-            responses=[_mock_analysis_json(), _mock_plan_json(), _mock_plan_json()]
-        )
-        listing_a = _make_listing(dedup_key="same_key")
-        listing_b = _make_listing(dedup_key="same_key")
-
-        state = JobAgentState(
-            search_criteria=SearchCriteria(),
-            qualified_listings=[listing_a, listing_b],
-            run_id="test-cache",
+            qualified_listings=[listing],
+            job_analyses={listing.dedup_key: _make_analysis()},
+            run_id="test-plan-model",
         )
         _patch_settings(tmp_path)
         await tailoring_node(state, llm_client=mock_client)
 
-        assert len(mock_client.calls) == 3  # 1 analysis + 2 plans (not 2+2)
-
-    @pytest.mark.asyncio
-    async def test_cache_disabled_calls_analysis_twice(self, tmp_path: Path) -> None:
-        """With cache off, duplicate dedup_keys still run separate analyses."""
-        from pipelines.job_agent.nodes.tailoring import tailoring_node
-
-        mock_client = MockLLMClient(
-            responses=[
-                _mock_analysis_json(),
-                _mock_plan_json(),
-                _mock_analysis_json(),
-                _mock_plan_json(),
-            ]
-        )
-        listing_a = _make_listing(dedup_key="same_key")
-        listing_b = _make_listing(dedup_key="same_key")
-
-        state = JobAgentState(
-            search_criteria=SearchCriteria(),
-            qualified_listings=[listing_a, listing_b],
-            run_id="test-no-cache",
-        )
-        _patch_settings(tmp_path, enable_cache=False)
-        await tailoring_node(state, llm_client=mock_client)
-
-        assert len(mock_client.calls) == 4  # 2 analyses + 2 plans
+        plan_call = mock_client.calls[0]
+        assert plan_call[1]["model"] is None  # uses client default
 
 
 # ── test helpers ───────────────────────────────────────────────────────
@@ -686,11 +612,8 @@ class TestTailoringNode:
 def _patch_settings(
     tmp_path: Path,
     *,
-    analysis_model: str = "claude-haiku-4-5-20251001",
     plan_model: str = "",
-    analysis_max_tokens: int = 1024,
     plan_max_tokens: int = 2048,
-    enable_cache: bool = True,
 ) -> None:
     """Point resume settings at the test fixture profile and tmp output dir."""
     import os
@@ -700,9 +623,8 @@ def _patch_settings(
     get_settings.cache_clear()
     os.environ["KP_RESUME_MASTER_PROFILE_PATH"] = str(_FIXTURES_DIR / "master_profile.yaml")
     os.environ["KP_RESUME_OUTPUT_DIR"] = str(tmp_path / "output")
-    os.environ["KP_RESUME_ANALYSIS_MODEL"] = analysis_model
     os.environ["KP_RESUME_PLAN_MODEL"] = plan_model
-    os.environ["KP_RESUME_ANALYSIS_MAX_TOKENS"] = str(analysis_max_tokens)
     os.environ["KP_RESUME_PLAN_MAX_TOKENS"] = str(plan_max_tokens)
-    os.environ["KP_RESUME_ENABLE_ANALYSIS_CACHE"] = str(enable_cache).lower()
+    os.environ["KP_JOB_ANALYSIS_MODEL"] = "claude-haiku-4-5-20251001"
+    os.environ["KP_JOB_ANALYSIS_ENABLE_CACHE"] = "true"
     get_settings.cache_clear()
