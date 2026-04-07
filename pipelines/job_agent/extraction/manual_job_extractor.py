@@ -101,7 +101,14 @@ _SALARY_RE = re.compile(
 
 @dataclass
 class ExtractedJobData:
-    """Canonical extraction result before conversion to ``JobListing``."""
+    """Canonical extraction result before conversion to ``JobListing``.
+
+    Description fields:
+    - ``raw_description``: faithful block text as extracted from the winning
+      candidate source (before normalization).
+    - ``cleaned_description``: normalized canonical text used downstream by
+      ``JobListing.description`` and the analysis/tailoring nodes.
+    """
 
     title: str
     company: str
@@ -110,7 +117,6 @@ class ExtractedJobData:
     source: JobSource
     raw_description: str
     cleaned_description: str
-    best_description: str
     salary_min: int | None = None
     salary_max: int | None = None
     remote: bool | None = None
@@ -151,10 +157,13 @@ def generate_dedup_key(company: str, title: str, url: str) -> str:
 
 
 async def extract_job_data_from_url(url: str) -> ExtractedJobData:
-    """Fetch and extract normalized job data from a direct listing URL."""
-    canonical_input = canonicalize_job_url(url)
+    """Fetch and extract normalized job data from a direct listing URL.
+
+    Fetches with the original URL to preserve all query parameters, then
+    canonicalizes the final resolved URL for provider detection and dedup.
+    """
     http_fetcher = HttpFetcher()
-    http_result = await http_fetcher.fetch(canonical_input)
+    http_result = await http_fetcher.fetch(url.strip())
     http_final_url = canonicalize_job_url(http_result.final_url)
     http_provider = detect_provider(http_final_url)
     http_source = map_provider_to_source(http_provider)
@@ -172,7 +181,6 @@ async def extract_job_data_from_url(url: str) -> ExtractedJobData:
         or len(best.cleaned_description) < _MIN_DESCRIPTION_CHARS
         or not best.title
         or not best.company
-        or _looks_js_blocked(http_result.html)
     )
 
     if needs_browser_fallback:
@@ -259,9 +267,10 @@ def detect_provider(url: str) -> str:
 
 
 def map_provider_to_source(provider: str) -> JobSource:
-    """Map provider label to existing ``JobSource`` enum."""
+    """Map provider label to ``JobSource`` enum."""
     return {
         "linkedin": JobSource.LINKEDIN,
+        "indeed": JobSource.INDEED,
         "greenhouse": JobSource.GREENHOUSE,
         "lever": JobSource.LEVER,
         "workday": JobSource.WORKDAY,
@@ -330,7 +339,6 @@ def _extract_from_html(
         source=source,
         raw_description=best_description.raw_text,
         cleaned_description=best_description.cleaned_text,
-        best_description=best_description.cleaned_text,
         salary_min=salary_min,
         salary_max=salary_max,
         remote=remote,
@@ -397,7 +405,7 @@ def _select_best_description_candidate(
     )
     if not candidates:
         return _DescriptionCandidate(source="empty", raw_text="", cleaned_text="", score=0)
-    return max(candidates, key=lambda c: (c.score, len(c.cleaned_text)))
+    return max(candidates, key=lambda c: c.score)
 
 
 def _build_description_candidates(
@@ -569,7 +577,7 @@ def _extract_generic_main_block(soup: BeautifulSoup) -> str:
         cleaned_text = normalize_description(raw_text)
         if len(cleaned_text) < 120:
             continue
-        score = _score_description_candidate(cleaned_text, source="generic")
+        score = _score_description_candidate(cleaned_text, source="_internal")
         if score > best_score:
             best_score = score
             best_node = node
@@ -585,7 +593,7 @@ def _extract_generic_main_block(soup: BeautifulSoup) -> str:
         sib_cleaned = normalize_description(sib_text)
         if len(sib_cleaned) < 40:
             continue
-        if _score_description_candidate(sib_cleaned, source="generic") > 0:
+        if _score_description_candidate(sib_cleaned, source="_internal") > 0:
             parts.append(sib_text)
     return "\n\n".join(parts)
 
@@ -821,7 +829,7 @@ def _extraction_quality_score(data: ExtractedJobData, html: str) -> int:
         score += 180
     if data.location:
         score += 80
-    if data.source in {JobSource.GREENHOUSE, JobSource.LEVER, JobSource.WORKDAY, JobSource.LINKEDIN}:
+    if data.source in {JobSource.GREENHOUSE, JobSource.LEVER, JobSource.WORKDAY, JobSource.LINKEDIN, JobSource.INDEED}:
         score += 80
     cleaned = data.cleaned_description.lower()
     if "basic qualifications" in cleaned:

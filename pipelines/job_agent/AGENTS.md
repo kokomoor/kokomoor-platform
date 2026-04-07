@@ -52,7 +52,8 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 - **Never auto-submit.** The pipeline must pause for human approval before application submission. This is a hard product constraint.
 - **Anti-detection is mandatory.** All browser interactions go through `core.browser.BrowserManager`. Use `rate_limited_goto()` and `human_delay()`. Never raw Playwright.
 - **Prefer APIs/aggregators** over scraping where available. Discovery should check RSS feeds or public APIs before falling back to browser scraping.
-- **Extractor contract:** map provider/source from resolved final URLs (post-redirect), score description candidates by quality (structured/provider/generic/fallback), and keep `JobListing.description` as cleaned canonical text.
+- **Extractor contract:** fetch with original URL, canonicalize the resolved final URL for provider/source detection and dedup, score description candidates by quality (structured/provider/generic/fallback), and keep `JobListing.description` as cleaned canonical text. Raw extracted text is preserved in notes for debugging.
+- **Status transitions:** `DISCOVERED → ANALYZING → ANALYZED → TAILORING → PENDING_REVIEW` (or `ERRORED` at any failure point). Analysis/tailoring failures set `ApplicationStatus.ERRORED`; avoid logic that assumes all qualified listings become tailored.
 
 ## Job analysis node
 
@@ -184,4 +185,4 @@ pytest pipelines/job_agent/tests/ -v
 - Using `state.tailored_listings` without checking `tailored_resume_path` — some listings may have failed tailoring; check per-listing path before downstream processing.
 - Tailoring node expects `state.job_analyses` to be pre-populated by the upstream job-analysis node. If a listing has no matching analysis, it is skipped with an error — not crashed.
 - Setting `KP_JOB_ANALYSIS_MODEL` to empty string means the analysis falls back to the default `KP_ANTHROPIC_MODEL` (Sonnet), which is more expensive. Only do this if Haiku quality is insufficient for a specific use case.
-- Analysis/tailoring failures now set `ApplicationStatus.ERRORED`; avoid logic that assumes all qualified listings become tailored.
+- `INDEED` is a supported `JobSource`. Provider detection, source mapping, and selectors all handle Indeed URLs.

@@ -161,6 +161,21 @@ class TestJobAnalysisNode:
         assert "same_key" in result.job_analyses
 
     @pytest.mark.asyncio
+    async def test_sets_analyzed_status_on_success(self, tmp_path: Path) -> None:
+        from pipelines.job_agent.nodes.job_analysis import job_analysis_node
+
+        mock_client = MockLLMClient(responses=[_mock_analysis_json()])
+        listing = _make_listing()
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing],
+            run_id="test-status",
+        )
+        _patch_settings(tmp_path)
+        await job_analysis_node(state, llm_client=mock_client)
+        assert listing.status == ApplicationStatus.ANALYZED
+
+    @pytest.mark.asyncio
     async def test_uses_full_description(self, tmp_path: Path) -> None:
         """Verify the node sends the full JD, not a truncated slice."""
         from pipelines.job_agent.nodes.job_analysis import job_analysis_node

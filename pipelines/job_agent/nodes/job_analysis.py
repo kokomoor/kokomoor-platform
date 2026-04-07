@@ -147,6 +147,8 @@ async def _analyse_listing(
         run_id=run_id,
     )
 
+    listing.status = ApplicationStatus.ANALYZED
+
     logger.info(
         "job_analysis.analysed",
         dedup_key=listing.dedup_key,

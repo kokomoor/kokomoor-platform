@@ -25,6 +25,7 @@ class ApplicationStatus(StrEnum):
     DISCOVERED = "discovered"
     FILTERED_OUT = "filtered_out"
     ANALYZING = "analyzing"
+    ANALYZED = "analyzed"
     TAILORING = "tailoring"
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"
@@ -47,6 +48,7 @@ class JobSource(StrEnum):
     GREENHOUSE = "greenhouse"
     LEVER = "lever"
     WORKDAY = "workday"
+    INDEED = "indeed"
     COMPANY_SITE = "company_site"
     OTHER = "other"
 

@@ -80,6 +80,7 @@ Key settings for this pipeline:
 - `KP_BROWSER_HEADLESS` — Set `false` to watch browser automation
 
 Manual extraction details:
-- Provider/source mapping uses the final resolved URL after redirects (HTTP, then browser if fallback is used).
+- Fetches with the original URL to preserve query parameters; canonicalizes the resolved final URL for provider/source detection and dedup.
 - Description selection is quality-based across structured/provider/generic/fallback candidates (not fixed source precedence).
 - `JobListing.description` stores cleaned canonical text; raw extracted text is preserved in extraction notes for debugging.
+- Status transitions: `DISCOVERED → ANALYZING → ANALYZED → TAILORING → PENDING_REVIEW` (or `ERRORED` at any failure point).

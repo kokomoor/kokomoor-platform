@@ -7,9 +7,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import sys
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -60,9 +60,9 @@ def _write_artifacts(
 
 
 def _default_run_id(job_url: str) -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    url_hash = hashlib.sha256(job_url.encode("utf-8")).hexdigest()[:8]
-    return f"manual-url-{stamp}-{url_hash}"
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    nonce = uuid.uuid4().hex[:8]
+    return f"manual-url-{stamp}-{nonce}"
 
 
 async def main() -> None:

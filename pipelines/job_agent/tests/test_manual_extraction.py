@@ -54,6 +54,7 @@ class TestExtractionHelpers:
 
     def test_source_mapping(self) -> None:
         assert map_provider_to_source("linkedin") == JobSource.LINKEDIN
+        assert map_provider_to_source("indeed") == JobSource.INDEED
         assert map_provider_to_source("greenhouse") == JobSource.GREENHOUSE
         assert map_provider_to_source("ashby") == JobSource.OTHER
 
@@ -68,7 +69,7 @@ class TestExtractionHelpers:
 
 
 class TestExtractionFromHtml:
-    def test_raw_cleaned_best_description_fields(self) -> None:
+    def test_raw_and_cleaned_description_fields(self) -> None:
         html = """
         <html><body>
           <h1>Role</h1>
@@ -82,7 +83,6 @@ class TestExtractionFromHtml:
         data = extract_job_data_from_html("https://careers.example.com/jobs/role", html)
         assert data.raw_description
         assert data.cleaned_description
-        assert data.best_description == data.cleaned_description
         assert data.normalized_description == data.cleaned_description
         assert len(data.cleaned_description) <= len(data.raw_description)
 
@@ -197,7 +197,6 @@ class TestManualExtractionNode:
                 source=JobSource.OTHER,
                 raw_description="Raw text",
                 cleaned_description="Normalized text",
-                best_description="Normalized text",
                 salary_min=200000,
                 salary_max=240000,
                 remote=False,
@@ -389,12 +388,90 @@ class TestExtractionFromUrlFlow:
         assert "basic qualifications" in data.cleaned_description.lower()
 
 
+    @pytest.mark.asyncio
+    async def test_browser_fallback_subtle_quality_difference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both HTTP and browser have real content; browser wins on section richness."""
+        from core.fetch.types import FetchMethod, FetchResult
+        from pipelines.job_agent.extraction.manual_job_extractor import extract_job_data_from_url
+
+        http_html = """
+        <html><body><h1>Senior Engineer</h1>
+        <div>
+          <h2>About the role</h2>
+          <p>Join our team to build amazing distributed systems at scale.</p>
+          <p>You will work across the full stack on real-time data pipelines.</p>
+          <p>We are looking for engineers with strong fundamentals.</p>
+          <p>Competitive salary and benefits. Remote friendly.</p>
+          <p>Full-time position starting immediately.</p>
+          <p>Experience with Python and cloud infrastructure preferred.</p>
+        </div>
+        </body></html>
+        """
+        browser_html = """
+        <html><body><h1>Senior Engineer</h1>
+        <span class="company">Acme Platforms</span>
+        <div>
+          <h2>Responsibilities</h2>
+          <ul>
+            <li>Design and build distributed systems at scale</li>
+            <li>Own full lifecycle of real-time data pipelines</li>
+          </ul>
+          <h2>Basic Qualifications</h2>
+          <ul>
+            <li>5+ years software engineering experience</li>
+            <li>Strong Python and cloud infrastructure skills</li>
+          </ul>
+          <h2>Preferred Qualifications</h2>
+          <ul>
+            <li>Experience with Kafka, Spark, or similar frameworks</li>
+            <li>MS in Computer Science</li>
+          </ul>
+        </div>
+        </body></html>
+        """
+
+        class _HttpStub:
+            async def fetch(self, url: str) -> FetchResult:
+                return FetchResult(
+                    html=http_html,
+                    final_url="https://careers.acme.example/jobs/123",
+                    status_code=200,
+                    method=FetchMethod.HTTP,
+                )
+
+        class _BrowserStub:
+            async def fetch(self, url: str) -> FetchResult:
+                return FetchResult(
+                    html=browser_html,
+                    final_url="https://careers.acme.example/jobs/123",
+                    status_code=200,
+                    method=FetchMethod.BROWSER,
+                )
+
+        monkeypatch.setattr(
+            "pipelines.job_agent.extraction.manual_job_extractor.HttpFetcher",
+            _HttpStub,
+        )
+        monkeypatch.setattr(
+            "pipelines.job_agent.extraction.manual_job_extractor.BrowserFetcher",
+            _BrowserStub,
+        )
+
+        data = await extract_job_data_from_url("https://careers.acme.example/jobs/123")
+        assert data.metadata["browser_fallback_used"] is True
+        assert data.metadata["extraction_winner"] == "browser"
+        assert "basic qualifications" in data.cleaned_description.lower()
+        assert "preferred qualifications" in data.cleaned_description.lower()
+
+
 class TestManualRunId:
     def test_default_manual_run_id_is_unique_and_prefixed(self) -> None:
         from scripts.run_manual_url_tailor import _default_run_id
 
         run_id_1 = _default_run_id("https://example.com/jobs/1")
-        run_id_2 = _default_run_id("https://example.com/jobs/2")
+        run_id_2 = _default_run_id("https://example.com/jobs/1")
         assert run_id_1.startswith("manual-url-")
         assert run_id_2.startswith("manual-url-")
         assert run_id_1 != run_id_2
