@@ -11,6 +11,7 @@ Together these let a human verify the full pipeline handoff.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,24 @@ def write_extracted_job_markdown(
     safe_id = listing.dedup_key[:16] if listing.dedup_key else "unknown"
     path = out_dir / f"extracted_job_{safe_id}.md"
 
+    extraction_notes: dict[str, object] = {}
+    if listing.notes:
+        try:
+            loaded = json.loads(listing.notes)
+            if isinstance(loaded, dict):
+                extraction_notes = loaded
+        except json.JSONDecodeError:
+            extraction_notes = {}
+
+    raw_description = extraction_notes.get("raw_description")
+    raw_section = ""
+    if isinstance(raw_description, str) and raw_description.strip():
+        raw_section = f"""
+## Raw extracted block
+
+{raw_description}
+"""
+
     body = f"""# Scraped job content (full, untruncated)
 
 **Title:** {listing.title}
@@ -48,6 +67,7 @@ def write_extracted_job_markdown(
 ---
 
 {listing.description or "(empty)"}
+{raw_section}
 """
     path.write_text(body.strip() + "\n", encoding="utf-8")
     return path

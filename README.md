@@ -23,7 +23,7 @@ Job URL ─────► Extraction ─────► Job Analysis (LLM) ─�
                Normalize text     domain signals            rewrite, order          document
 ```
 
-**Extraction** fetches the page (HTTP first, Playwright fallback for JS-rendered sites), parses structured metadata (JSON-LD, Open Graph), runs provider-specific selectors (LinkedIn, Greenhouse, Lever, Workday, Amazon, etc.), and falls back to generic content-block scoring. The full job description is preserved — no truncation.
+**Extraction** fetches the page (HTTP first, Playwright fallback for JS-rendered sites), detects provider/source from the **resolved final URL** after redirects, parses structured metadata (JSON-LD, Open Graph), runs provider-specific selectors (LinkedIn, Greenhouse, Lever, Workday, Amazon, etc.), and falls back to generic content-block scoring. Structured metadata is treated as one candidate, not an automatic winner: visible rich sections (responsibilities/qualifications) can win when higher quality.
 
 **Job Analysis** sends the complete description to an LLM (Haiku, configurable) for structured extraction: themes, seniority level, domain tags, ATS keywords, basic/preferred qualifications, and positioning angles.
 
@@ -117,6 +117,8 @@ The script writes three files to `data/tailored_resumes/<run-id>/`:
 | `extracted_job_*.md` | Full scraped job description (verify what was captured) |
 | `job_analysis_*.md` | Structured LLM analysis (verify what the tailoring sees) |
 
+`run-id` defaults to a unique timestamp+URL hash value (`manual-url-...`) and can be overridden with a second CLI argument or `KP_MANUAL_RUN_ID`.
+
 ## Development
 
 ```bash
@@ -145,7 +147,10 @@ Key settings:
 | `KP_JOB_ANALYSIS_MODEL` | `claude-haiku-4-5-20251001` | Model for job analysis (cheap structured extraction) |
 | `KP_RESUME_PLAN_MODEL` | `""` (= Sonnet) | Model for tailoring plan (empty = default model) |
 | `KP_JOB_ANALYSIS_MAX_INPUT_CHARS` | `30000` | Safety cap on JD length sent to analysis LLM |
+| `KP_FETCH_BROWSER_TIMEOUT_MS` | `20000` | Browser navigation timeout for `BrowserFetcher` |
 | `KP_RESUME_MASTER_PROFILE_PATH` | `pipelines/.../candidate_profile.yaml` | Path to your master resume profile |
+
+Job-analysis caching is keyed by `dedup_key + description hash`, so re-scraping the same URL with updated JD content will trigger a fresh analysis.
 
 ## Future pipelines
 

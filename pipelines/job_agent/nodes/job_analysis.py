@@ -11,6 +11,7 @@ running its own embedded LLM pass.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -63,8 +64,10 @@ async def job_analysis_node(
     enable_cache = settings.job_analysis_enable_cache
 
     for listing in state.qualified_listings:
-        if enable_cache and listing.dedup_key in state.job_analyses:
-            logger.info("job_analysis.cache_hit", dedup_key=listing.dedup_key)
+        cache_key = _analysis_cache_key(listing)
+        if enable_cache and cache_key in state.job_analysis_cache:
+            logger.info("job_analysis.cache_hit", dedup_key=listing.dedup_key, cache_key=cache_key)
+            state.job_analyses[listing.dedup_key] = state.job_analysis_cache[cache_key]
             continue
 
         try:
@@ -78,7 +81,10 @@ async def job_analysis_node(
                 run_id=state.run_id,
             )
             state.job_analyses[listing.dedup_key] = analysis
+            if enable_cache:
+                state.job_analysis_cache[cache_key] = analysis
         except Exception as exc:
+            listing.status = ApplicationStatus.ERRORED
             state.errors.append(
                 {
                     "node": "job_analysis",
@@ -99,6 +105,12 @@ async def job_analysis_node(
         errors=len(state.errors),
     )
     return state
+
+
+def _analysis_cache_key(listing: JobListing) -> str:
+    """Cache key for analysis includes dedup key + description fingerprint."""
+    desc_hash = hashlib.sha256((listing.description or "").encode("utf-8")).hexdigest()[:16]
+    return f"{listing.dedup_key}:{desc_hash}"
 
 
 async def _analyse_listing(
@@ -134,6 +146,8 @@ async def _analyse_listing(
         max_tokens=max_tokens,
         run_id=run_id,
     )
+
+    listing.status = ApplicationStatus.ANALYZED
 
     logger.info(
         "job_analysis.analysed",

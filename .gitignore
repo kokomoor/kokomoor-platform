@@ -28,6 +28,7 @@ data/*.db-journal
 
 # Generated files
 *.pdf
+*.docx
 output/
 data/tailored_resumes/
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.testing import MockLLMClient
-from pipelines.job_agent.models import JobListing, JobSource, SearchCriteria
+from pipelines.job_agent.models import ApplicationStatus, JobListing, JobSource, SearchCriteria
 from pipelines.job_agent.state import JobAgentState
 
 
@@ -121,6 +121,7 @@ class TestJobAnalysisNode:
         assert len(result.errors) == 1
         assert "empty description" in result.errors[0]["message"].lower()
         assert "test_analysis_001" not in result.job_analyses
+        assert result.qualified_listings[0].status == ApplicationStatus.ERRORED
 
     @pytest.mark.asyncio
     async def test_cache_reuses_result(self, tmp_path: Path) -> None:
@@ -140,6 +141,39 @@ class TestJobAnalysisNode:
 
         assert len(mock_client.calls) == 1
         assert "same_key" in result.job_analyses
+
+    @pytest.mark.asyncio
+    async def test_cache_invalidates_when_description_changes(self, tmp_path: Path) -> None:
+        from pipelines.job_agent.nodes.job_analysis import job_analysis_node
+
+        mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_analysis_json()])
+        listing_a = _make_listing(dedup_key="same_key", description="first description")
+        listing_b = _make_listing(dedup_key="same_key", description="second description changed")
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing_a, listing_b],
+            run_id="test-cache-desc-change",
+        )
+        _patch_settings(tmp_path)
+        result = await job_analysis_node(state, llm_client=mock_client)
+
+        assert len(mock_client.calls) == 2
+        assert "same_key" in result.job_analyses
+
+    @pytest.mark.asyncio
+    async def test_sets_analyzed_status_on_success(self, tmp_path: Path) -> None:
+        from pipelines.job_agent.nodes.job_analysis import job_analysis_node
+
+        mock_client = MockLLMClient(responses=[_mock_analysis_json()])
+        listing = _make_listing()
+        state = JobAgentState(
+            search_criteria=SearchCriteria(),
+            qualified_listings=[listing],
+            run_id="test-status",
+        )
+        _patch_settings(tmp_path)
+        await job_analysis_node(state, llm_client=mock_client)
+        assert listing.status == ApplicationStatus.ANALYZED
 
     @pytest.mark.asyncio
     async def test_uses_full_description(self, tmp_path: Path) -> None:

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 import pytest
 import respx
 from bs4 import BeautifulSoup
 
+from core.fetch.browser_fetch import BrowserFetcher
 from core.fetch.http_client import HttpFetcher
 from core.fetch.jsonld import (
     iter_json_ld_objects_from_html,
@@ -14,6 +17,9 @@ from core.fetch.jsonld import (
     parse_json_ld_payload,
 )
 from core.fetch.types import FetchMethod
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 
 class TestParseJsonLdPayload:
@@ -82,3 +88,59 @@ class TestHttpFetcher:
             fetcher = HttpFetcher(max_retries=1)
             with pytest.raises(ValueError, match="HTTP fetch failed"):
                 await fetcher.fetch("https://example.com/fail")
+
+
+@pytest.mark.asyncio
+class TestBrowserFetcher:
+    async def test_uses_navigation_response_status_and_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FakeResponse:
+            status = 418
+
+        class _FakePage:
+            url = "https://example.com/final"
+
+            async def wait_for_timeout(self, ms: int) -> None:
+                return None
+
+            async def content(self) -> str:
+                return "<html>ok</html>"
+
+        class _FakeBrowserManager:
+            def __init__(self) -> None:
+                self.page = _FakePage()
+                self.timeout_ms_seen: int | None = None
+
+            async def __aenter__(self) -> _FakeBrowserManager:
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc: BaseException | None,
+                tb: TracebackType | None,
+            ) -> None:
+                return None
+
+            async def new_page(self) -> _FakePage:
+                return self.page
+
+            async def rate_limited_goto(
+                self,
+                page: _FakePage,
+                url: str,
+                *,
+                timeout_ms: int | None,
+            ) -> _FakeResponse:
+                self.timeout_ms_seen = timeout_ms
+                return _FakeResponse()
+
+        fake_manager = _FakeBrowserManager()
+        monkeypatch.setattr("core.fetch.browser_fetch.BrowserManager", lambda: fake_manager)
+
+        fetcher = BrowserFetcher(post_wait_ms=0, timeout_ms=12345)
+        result = await fetcher.fetch("https://example.com/start")
+        assert result.status_code == 418
+        assert result.final_url == "https://example.com/final"
+        assert fake_manager.timeout_ms_seen == 12345

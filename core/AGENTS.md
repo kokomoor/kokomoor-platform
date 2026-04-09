@@ -19,6 +19,7 @@ Shared infrastructure library. All pipelines import from this package. Changes h
 ## Rules
 
 - **No pipeline-specific logic.** If it only matters to one pipeline, it belongs in that pipeline's package.
+- **`core.fetch` is transport-only.** Keep it domain-agnostic: redirects, timeouts, retries, response status, and HTML retrieval belong here; job-board selectors and extraction heuristics do not.
 - **All public APIs must be typed.** mypy strict is enabled project-wide.
 - **Adding a new setting:** add to `Settings` in `config.py` with `KP_` prefix, default value, and description. Update `.env.example`.
 - **Database changes:** use `async_sessionmaker` (not `sessionmaker`) with `AsyncEngine`. Create Alembic migrations for schema changes (`alembic revision --autogenerate -m "description"`).

@@ -23,6 +23,10 @@ async def manual_extraction_node(state: JobAgentState) -> JobAgentState:
     state.discovered_listings = []
     state.qualified_listings = []
 
+    if state.dry_run:
+        logger.info("manual_extract.skip_dry_run", url=state.manual_job_url or None)
+        return state
+
     if not state.manual_job_url:
         state.errors.append(
             {
@@ -45,7 +49,7 @@ async def manual_extraction_node(state: JobAgentState) -> JobAgentState:
             location=extracted.location,
             url=extracted.canonical_url,
             source=extracted.source,
-            description=extracted.normalized_description or extracted.raw_description,
+            description=extracted.cleaned_description,
             salary_min=extracted.salary_min,
             salary_max=extracted.salary_max,
             remote=extracted.remote,
@@ -53,9 +57,10 @@ async def manual_extraction_node(state: JobAgentState) -> JobAgentState:
             dedup_key=dedup_key,
             notes=json.dumps(
                 {
+                    "extraction": extracted.metadata,
                     "employment_type": extracted.employment_type,
                     "role_summary": extracted.role_summary,
-                    **extracted.metadata,
+                    "raw_description": extracted.raw_description,
                 },
                 sort_keys=True,
             ),

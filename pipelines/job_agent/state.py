@@ -53,6 +53,8 @@ class JobAgentState:
 
     # Job Analysis → Tailoring (keyed by listing dedup_key)
     job_analyses: dict[str, JobAnalysisResult] = field(default_factory=dict)
+    # Internal cache keyed by dedup_key + description hash.
+    job_analysis_cache: dict[str, JobAnalysisResult] = field(default_factory=dict)
 
     # Tailoring → Human Review
     tailored_listings: list[JobListing] = field(default_factory=list)

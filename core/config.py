@@ -100,6 +100,12 @@ class Settings(BaseSettings):
         le=30_000,
         description="Milliseconds to wait after navigation before reading page HTML (browser fetch).",
     )
+    fetch_browser_timeout_ms: int = Field(
+        default=20_000,
+        ge=2_000,
+        le=120_000,
+        description="Navigation timeout for browser fetch page.goto() calls.",
+    )
 
     # --- Observability ---
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

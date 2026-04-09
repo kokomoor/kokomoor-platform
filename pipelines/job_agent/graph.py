@@ -13,7 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from langgraph.graph import END
@@ -29,6 +29,8 @@ from pipelines.job_agent.nodes.tracking import tracking_node
 from pipelines.job_agent.state import JobAgentState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from core.llm.protocol import LLMClient
 
 logger = structlog.get_logger(__name__)
@@ -58,11 +60,17 @@ def _should_continue_after_job_analysis(state: JobAgentState) -> str:
     return "tailoring"
 
 
-def _should_continue_after_review(state: JobAgentState) -> str:
-    """Route after human review: apply approved listings or skip."""
-    if not state.approved_listings:
-        return "notification"
-    return "application"
+def _llm_node_wrapper(
+    node_fn: Callable[..., Coroutine[Any, Any, JobAgentState]],
+    *,
+    llm_client: LLMClient | None,
+) -> Callable[[JobAgentState], Coroutine[Any, Any, JobAgentState]]:
+    """Wrap an LLM-backed node with optional injected client."""
+
+    async def _wrapped(state: JobAgentState) -> JobAgentState:
+        return await node_fn(state, llm_client=llm_client)
+
+    return _wrapped
 
 
 def build_graph(
@@ -90,16 +98,16 @@ def build_graph(
         JobAgentState,
     )
 
-    async def _analysis_wrapper(state: JobAgentState) -> JobAgentState:
-        return await job_analysis_node(state, llm_client=llm_client)
-
-    async def _tailoring_wrapper(state: JobAgentState) -> JobAgentState:
-        return await tailoring_node(state, llm_client=llm_client)
-
     graph.add_node("discovery", discovery_node)
     graph.add_node("filtering", filtering_node)
-    graph.add_node("job_analysis", _analysis_wrapper)
-    graph.add_node("tailoring", _tailoring_wrapper)
+    graph.add_node(
+        "job_analysis",
+        cast(Any, _llm_node_wrapper(job_analysis_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "tailoring",
+        cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
 
@@ -145,15 +153,15 @@ def build_manual_graph(
         JobAgentState,
     )
 
-    async def _analysis_wrapper(state: JobAgentState) -> JobAgentState:
-        return await job_analysis_node(state, llm_client=llm_client)
-
-    async def _tailoring_wrapper(state: JobAgentState) -> JobAgentState:
-        return await tailoring_node(state, llm_client=llm_client)
-
     graph.add_node("manual_extraction", manual_extraction_node)
-    graph.add_node("job_analysis", _analysis_wrapper)
-    graph.add_node("tailoring", _tailoring_wrapper)
+    graph.add_node(
+        "job_analysis",
+        cast(Any, _llm_node_wrapper(job_analysis_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "tailoring",
+        cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
 

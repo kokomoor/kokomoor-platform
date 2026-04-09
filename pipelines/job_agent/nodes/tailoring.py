@@ -101,6 +101,7 @@ async def tailoring_node(
     for listing in state.qualified_listings:
         analysis = state.job_analyses.get(listing.dedup_key)
         if analysis is None:
+            listing.status = ApplicationStatus.ERRORED
             state.errors.append(
                 {
                     "node": "tailoring",
@@ -124,6 +125,7 @@ async def tailoring_node(
                 plan_max_tokens=plan_max_tokens,
             )
         except Exception as exc:
+            listing.status = ApplicationStatus.ERRORED
             state.errors.append(
                 {
                     "node": "tailoring",
