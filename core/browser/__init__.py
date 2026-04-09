@@ -18,7 +18,14 @@ import asyncio
 from typing import TYPE_CHECKING
 
 import structlog
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, Response, async_playwright
+from playwright.async_api import (
+    async_playwright,
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    Response,
+)
 
 from core.browser.stealth import apply_stealth_defaults
 from core.config import get_settings

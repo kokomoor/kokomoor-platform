@@ -13,7 +13,8 @@ Usage:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import structlog
 from langgraph.graph import END

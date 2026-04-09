@@ -7,8 +7,8 @@ import pytest
 import respx
 from bs4 import BeautifulSoup
 
-from core.fetch.http_client import HttpFetcher
 from core.fetch.browser_fetch import BrowserFetcher
+from core.fetch.http_client import HttpFetcher
 from core.fetch.jsonld import (
     iter_json_ld_objects_from_html,
     iter_json_ld_objects_from_soup,
