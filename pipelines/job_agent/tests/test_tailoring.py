@@ -107,6 +107,10 @@ def _make_analysis() -> JobAnalysisResult:
     )
 
 
+def _mock_analysis_json() -> str:
+    return _make_analysis().model_dump_json()
+
+
 def _mock_plan_json() -> str:
     return json.dumps(
         {
@@ -628,6 +632,32 @@ class TestTailoringNode:
 
         plan_call = mock_client.calls[0]
         assert plan_call[1]["model"] is None  # uses client default
+
+
+@pytest.mark.asyncio
+async def test_analysis_then_tailoring_preserves_state_mutation_pattern(tmp_path: Path) -> None:
+    """Regression: analysis + tailoring still mutates listings in place and writes paths."""
+    from pipelines.job_agent.nodes.job_analysis import job_analysis_node
+    from pipelines.job_agent.nodes.tailoring import tailoring_node
+
+    listing = _make_listing(description="A" * 5000)
+    state = JobAgentState(
+        search_criteria=SearchCriteria(),
+        qualified_listings=[listing],
+        run_id="test-regression-flow",
+    )
+    _patch_settings(tmp_path)
+    mock_client = MockLLMClient(responses=[_mock_analysis_json(), _mock_plan_json()])
+
+    after_analysis = await job_analysis_node(state, llm_client=mock_client)
+    result = await tailoring_node(after_analysis, llm_client=mock_client)
+
+    assert len(mock_client.calls) == 2
+    assert result.tailored_listings is result.qualified_listings
+    assert result.qualified_listings[0] is listing
+    assert listing.tailored_resume_path is not None
+    assert Path(listing.tailored_resume_path).exists()
+    assert listing.status == ApplicationStatus.PENDING_REVIEW
 
 
 # ── test helpers ───────────────────────────────────────────────────────

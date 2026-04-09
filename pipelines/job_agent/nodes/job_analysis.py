@@ -12,13 +12,14 @@ running its own embedded LLM pass.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 
-from core.config import get_settings
-from core.llm.structured import structured_complete
+from core.config import Settings, get_settings
+from core.workflows import StructuredAnalysisEngine, StructuredAnalysisSpec
 from pipelines.job_agent.models import ApplicationStatus
 from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
@@ -30,6 +31,40 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+_ENGINE: StructuredAnalysisEngine[JobAgentState, JobListing, JobAnalysisResult, _Runtime] = (
+    StructuredAnalysisEngine()
+)
+
+
+@dataclass(frozen=True)
+class _Runtime:
+    prompt_template: str
+    settings: Settings
+
+
+def _build_spec() -> StructuredAnalysisSpec[JobAgentState, JobListing, JobAnalysisResult, _Runtime]:
+    return StructuredAnalysisSpec(
+        name="job_analysis",
+        response_model=JobAnalysisResult,
+        prepare=_prepare_runtime,
+        get_items=lambda state: state.qualified_listings,
+        should_skip=lambda state: state.dry_run or not state.qualified_listings,
+        on_skip=_on_skip,
+        build_prompt=_build_prompt,
+        get_run_id=lambda state: state.run_id,
+        get_model=lambda _state, runtime: runtime.settings.job_analysis_model or None,
+        get_max_tokens=lambda _state, runtime: runtime.settings.job_analysis_max_tokens,
+        get_cache_key=lambda _state, item, _runtime: _analysis_cache_key(item),
+        get_cached_result=_get_cached_result,
+        cache_result=_cache_result,
+        on_item_start=_on_item_start,
+        on_item_result=_on_item_result,
+        on_item_error=_on_item_error,
+        on_complete=_on_complete,
+    )
+
+
+JOB_ANALYSIS_SPEC = _build_spec()
 
 
 async def job_analysis_node(
@@ -43,68 +78,25 @@ async def job_analysis_node(
     """
     state.phase = PipelinePhase.JOB_ANALYSIS
 
-    if state.dry_run:
-        logger.info("job_analysis.skip_dry_run")
-        return state
-
-    if not state.qualified_listings:
-        logger.info("job_analysis.skip_no_listings")
-        return state
-
     if llm_client is None:
         from core.llm import AnthropicClient
 
         llm_client = AnthropicClient()
 
+    return await _ENGINE.run(state, llm_client=llm_client, spec=JOB_ANALYSIS_SPEC)
+
+
+def _prepare_runtime(_state: JobAgentState) -> _Runtime:
     settings = get_settings()
     prompt_template = (_PROMPTS_DIR / "tailor_job_analysis.md").read_text(encoding="utf-8")
-    model = settings.job_analysis_model or None
-    max_tokens = settings.job_analysis_max_tokens
-    max_input_chars = settings.job_analysis_max_input_chars
-    enable_cache = settings.job_analysis_enable_cache
+    return _Runtime(prompt_template=prompt_template, settings=settings)
 
-    for listing in state.qualified_listings:
-        cache_key = _analysis_cache_key(listing)
-        if enable_cache and cache_key in state.job_analysis_cache:
-            logger.info("job_analysis.cache_hit", dedup_key=listing.dedup_key, cache_key=cache_key)
-            state.job_analyses[listing.dedup_key] = state.job_analysis_cache[cache_key]
-            continue
 
-        try:
-            analysis = await _analyse_listing(
-                listing=listing,
-                llm_client=llm_client,
-                prompt_template=prompt_template,
-                model=model,
-                max_tokens=max_tokens,
-                max_input_chars=max_input_chars,
-                run_id=state.run_id,
-            )
-            state.job_analyses[listing.dedup_key] = analysis
-            if enable_cache:
-                state.job_analysis_cache[cache_key] = analysis
-        except Exception as exc:
-            listing.status = ApplicationStatus.ERRORED
-            state.errors.append(
-                {
-                    "node": "job_analysis",
-                    "dedup_key": listing.dedup_key,
-                    "message": str(exc)[:500],
-                }
-            )
-            logger.warning(
-                "job_analysis.failed",
-                dedup_key=listing.dedup_key,
-                error=str(exc)[:200],
-            )
-
-    logger.info(
-        "job_analysis.complete",
-        total=len(state.qualified_listings),
-        analysed=len(state.job_analyses),
-        errors=len(state.errors),
-    )
-    return state
+def _on_skip(state: JobAgentState) -> None:
+    if state.dry_run:
+        logger.info("job_analysis.skip_dry_run")
+    elif not state.qualified_listings:
+        logger.info("job_analysis.skip_no_listings")
 
 
 def _analysis_cache_key(listing: JobListing) -> str:
@@ -113,51 +105,87 @@ def _analysis_cache_key(listing: JobListing) -> str:
     return f"{listing.dedup_key}:{desc_hash}"
 
 
-async def _analyse_listing(
-    *,
-    listing: JobListing,
-    llm_client: LLMClient,
-    prompt_template: str,
-    model: str | None,
-    max_tokens: int,
-    max_input_chars: int,
-    run_id: str,
-) -> JobAnalysisResult:
-    """Run the LLM structured extraction for one listing."""
+def _get_cached_result(
+    state: JobAgentState, cache_key: str, runtime: _Runtime
+) -> JobAnalysisResult | None:
+    if not runtime.settings.job_analysis_enable_cache:
+        return None
+    return state.job_analysis_cache.get(cache_key)
+
+
+def _cache_result(
+    state: JobAgentState, cache_key: str, result: JobAnalysisResult, runtime: _Runtime
+) -> None:
+    if runtime.settings.job_analysis_enable_cache:
+        state.job_analysis_cache[cache_key] = result
+
+
+def _on_item_start(_state: JobAgentState, listing: JobListing, _runtime: _Runtime) -> None:
     if not listing.description:
         msg = f"Listing {listing.dedup_key} has empty description"
         raise ValueError(msg)
-
     listing.status = ApplicationStatus.ANALYZING
 
-    jd_text = listing.description[:max_input_chars]
 
-    prompt = prompt_template.format(
+def _build_prompt(state: JobAgentState, listing: JobListing, runtime: _Runtime) -> str:
+    jd_text = listing.description[: runtime.settings.job_analysis_max_input_chars]
+    prompt = runtime.prompt_template.format(
         job_title=listing.title,
         company=listing.company,
         job_description=jd_text,
     )
-
-    analysis = await structured_complete(
-        llm_client,
-        prompt,
-        response_model=JobAnalysisResult,
-        model=model,
-        max_tokens=max_tokens,
-        run_id=run_id,
+    logger.debug(
+        "job_analysis.prompt_built",
+        dedup_key=listing.dedup_key,
+        model=runtime.settings.job_analysis_model or "default",
+        input_chars=len(jd_text),
+        run_id=state.run_id,
     )
+    return prompt
 
+
+def _on_item_result(
+    state: JobAgentState,
+    listing: JobListing,
+    result: JobAnalysisResult,
+    runtime: _Runtime,
+) -> None:
+    state.job_analyses[listing.dedup_key] = result
     listing.status = ApplicationStatus.ANALYZED
-
     logger.info(
         "job_analysis.analysed",
         dedup_key=listing.dedup_key,
-        themes=analysis.themes[:3],
-        seniority=analysis.seniority,
-        basic_quals=len(analysis.basic_qualifications),
-        preferred_quals=len(analysis.preferred_qualifications),
-        model_used=model or "default",
-        input_chars=len(jd_text),
+        themes=result.themes[:3],
+        seniority=result.seniority,
+        basic_quals=len(result.basic_qualifications),
+        preferred_quals=len(result.preferred_qualifications),
+        model_used=runtime.settings.job_analysis_model or "default",
+        input_chars=min(len(listing.description), runtime.settings.job_analysis_max_input_chars),
     )
 
-    return analysis
+
+def _on_item_error(
+    state: JobAgentState, listing: JobListing, exc: Exception, _runtime: _Runtime
+) -> None:
+    listing.status = ApplicationStatus.ERRORED
+    state.errors.append(
+        {
+            "node": "job_analysis",
+            "dedup_key": listing.dedup_key,
+            "message": str(exc)[:500],
+        }
+    )
+    logger.warning(
+        "job_analysis.failed",
+        dedup_key=listing.dedup_key,
+        error=str(exc)[:200],
+    )
+
+
+def _on_complete(state: JobAgentState, _runtime: _Runtime) -> None:
+    logger.info(
+        "job_analysis.complete",
+        total=len(state.qualified_listings),
+        analysed=len(state.job_analyses),
+        errors=len(state.errors),
+    )
