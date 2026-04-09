@@ -71,3 +71,17 @@ skills:
   frameworks: [FastAPI, React, PyTorch]
   domains: [FinTech, SaaS, ML/AI]
   tools: [Docker, Kubernetes, AWS, Git]
+
+cover_letter:
+  preferred_tone: "Confident and precise"
+  preferred_signoff: "Sincerely,"
+  positioning_angles:
+    - "Translate deep technical experience into business outcomes"
+  motivation_themes:
+    - "Mission-critical problem solving"
+  emphasize_topics:
+    - "Quantified impact"
+  banned_phrases:
+    - "I am excited to apply"
+    - "leverage my background"
+    - "synergistic approach"

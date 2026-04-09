@@ -7,8 +7,8 @@ Automates job search, resume/cover letter tailoring, and application tracking.
 ## Pipeline Flow
 
 ```
-Default: Discovery → Filtering → Job Analysis → Tailoring → Human Review → Application → Tracking → Notification
-Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking → Notification
+Default: Discovery → Filtering → Job Analysis → Resume Tailoring → Cover-Letter Tailoring → Human Review → Application → Tracking → Notification
+Manual:  Manual Extraction (URL) → Job Analysis → Resume Tailoring → Cover-Letter Tailoring → Tracking → Notification
 ```
 
 ### Nodes
@@ -19,7 +19,8 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 | Manual Extraction (URL) | **Implemented** | Fetch direct job URL, extract and normalize a canonical `JobListing` |
 | Filtering | Implemented | Salary floor, keyword, dedup filters |
 | Job Analysis | **Implemented** | Full-JD structured extraction via LLM → `JobAnalysisResult` (themes, quals, keywords) |
-| Tailoring | **Implemented** | Plan + apply + render → `.docx` (consumes pre-computed analysis) |
+| Tailoring | **Implemented** | Resume tailoring: plan + apply + render → `.docx` (consumes pre-computed analysis) |
+| Cover-Letter Tailoring | **Implemented** | Cover-letter tailoring: structured plan + deterministic validation + `.docx` render |
 | Human Review | Planned (M4) | Email notification, approval gate |
 | Application | Planned (M4) | Playwright form-fill |
 | Tracking | Stub | SQLite persistence |
@@ -77,6 +78,9 @@ Key settings for this pipeline:
 - `KP_RESUME_PLAN_MODEL` — Model for tailoring plan pass (default: uses `KP_ANTHROPIC_MODEL`)
 - `KP_RESUME_PLAN_MAX_TOKENS` — Max output tokens for plan pass (default: `2048`)
 - `KP_RESUME_ENABLE_CRITIQUE` — Enable optional LLM critique pass (default: `false`)
+- `KP_COVER_LETTER_MODEL` / `KP_COVER_LETTER_MAX_TOKENS` — Cover-letter plan call model/token limits
+- `KP_COVER_LETTER_MAX_INPUT_CHARS` — Safety cap on JD length sent to cover-letter generation
+- `KP_COVER_LETTER_STYLE_GUIDE_PATH` — Externalized style guide path
 - `KP_BROWSER_HEADLESS` — Set `false` to watch browser automation
 
 Manual extraction details:

@@ -43,3 +43,34 @@ skills:
   frameworks: []
   domains: []
   tools: [Git]
+
+cover_letter:
+  preferred_tone: "Direct, confident, human. Professional but not stiff."
+  preferred_signoff: "Sincerely,"
+  positioning_angles:
+    - "Bridge technical depth and product judgment."
+  motivation_themes:
+    - "Mission-driven technology with real-world operational impact."
+  target_industries:
+    - "Defense"
+    - "AI/ML"
+  emphasize_topics:
+    - "Leading cross-functional technical teams"
+    - "Building production-grade systems"
+  de_emphasize_topics:
+    - "Early academic projects"
+  hard_constraints:
+    - "No em dashes."
+    - "No placeholders."
+  style_preferences:
+    - "Concrete, metric-backed examples."
+    - "Natural business-letter flow."
+    - "Vary sentence length."
+  banned_phrases:
+    - "I am excited to apply"
+    - "team player"
+    - "proven track record"
+    - "hit the ground running"
+    - "detail-oriented"
+  narrative_themes:
+    - "Hands-on builder who can also set direction."

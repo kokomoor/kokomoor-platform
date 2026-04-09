@@ -175,6 +175,40 @@ class Settings(BaseSettings):
         description="Max output tokens for the tailoring-plan LLM call.",
     )
 
+    # --- Cover Letter Tailoring ---
+    cover_letter_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Model for the cover-letter planning/generation pass.",
+    )
+    cover_letter_max_tokens: int = Field(
+        default=2200,
+        ge=512,
+        description="Max output tokens for the cover-letter structured plan call.",
+    )
+    cover_letter_max_input_chars: int = Field(
+        default=12_000,
+        ge=2000,
+        description="Safety cap on job-description chars sent to the cover-letter LLM call.",
+    )
+    cover_letter_style_guide_path: str = Field(
+        default=str(
+            _PROJECT_ROOT / "pipelines" / "job_agent" / "context" / "cover_letter_style.md"
+        ),
+        description="Path to local cover-letter style-guide markdown.",
+    )
+    cover_letter_output_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "tailored_cover_letters"),
+        description="Directory for generated tailored cover-letter .docx files.",
+    )
+    cover_letter_template_path: str = Field(
+        default="",
+        description="Optional template path for future cover-letter rendering customization.",
+    )
+    cover_letter_enable_critique: bool = Field(
+        default=False,
+        description="Enable optional critique pass for cover-letter generation.",
+    )
+
     # --- Feature Flags ---
     enable_browser_stealth: bool = Field(
         default=True,
