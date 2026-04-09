@@ -61,6 +61,22 @@ class MasterSkills(BaseModel):
         return self.languages + self.frameworks + self.domains + self.tools
 
 
+class CoverLetterPreferences(BaseModel):
+    """Optional profile knobs for cover-letter voice and constraints."""
+
+    preferred_tone: str = ""
+    preferred_signoff: str = ""
+    positioning_angles: list[str] = Field(default_factory=list)
+    motivation_themes: list[str] = Field(default_factory=list)
+    target_industries: list[str] = Field(default_factory=list)
+    emphasize_topics: list[str] = Field(default_factory=list)
+    de_emphasize_topics: list[str] = Field(default_factory=list)
+    hard_constraints: list[str] = Field(default_factory=list)
+    style_preferences: list[str] = Field(default_factory=list)
+    banned_phrases: list[str] = Field(default_factory=list)
+    narrative_themes: list[str] = Field(default_factory=list)
+
+
 class ResumeMasterProfile(BaseModel):
     """Complete master resume profile.
 
@@ -80,6 +96,7 @@ class ResumeMasterProfile(BaseModel):
     education: list[MasterEducation]
     experience: list[MasterExperience]
     skills: MasterSkills
+    cover_letter: CoverLetterPreferences | None = None
 
     def get_bullet(self, bullet_id: str) -> MasterBullet | None:
         """Look up a bullet by ID across all experience and education sections."""

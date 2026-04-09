@@ -19,6 +19,7 @@ import structlog
 from langgraph.graph import END
 from langgraph.graph.state import CompiledStateGraph, StateGraph
 
+from pipelines.job_agent.nodes.cover_letter_tailoring import cover_letter_tailoring_node
 from pipelines.job_agent.nodes.discovery import discovery_node
 from pipelines.job_agent.nodes.filtering import filtering_node
 from pipelines.job_agent.nodes.job_analysis import job_analysis_node
@@ -89,6 +90,7 @@ def build_graph(
     The graph implements this flow::
 
         START → discovery → filtering → job_analysis → tailoring
+              → cover_letter_tailoring
               → tracking → notification → END
 
     With conditional edges that skip stages when there's nothing to
@@ -107,6 +109,13 @@ def build_graph(
     graph.add_node(
         "tailoring",
         cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "cover_letter_tailoring",
+        cast(
+            "Any",
+            _llm_node_wrapper(cover_letter_tailoring_node, llm_client=llm_client),
+        ),
     )
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
@@ -132,7 +141,8 @@ def build_graph(
         },
     )
 
-    graph.add_edge("tailoring", "tracking")
+    graph.add_edge("tailoring", "cover_letter_tailoring")
+    graph.add_edge("cover_letter_tailoring", "tracking")
     graph.add_edge("tracking", "notification")
     graph.add_edge("notification", END)
 
@@ -147,6 +157,7 @@ def build_manual_graph(
 
     Flow:
         START -> manual_extraction -> job_analysis -> tailoring
+              -> cover_letter_tailoring
               -> tracking -> notification -> END
     """
     graph: StateGraph[JobAgentState, None, JobAgentState, JobAgentState] = StateGraph(
@@ -161,6 +172,13 @@ def build_manual_graph(
     graph.add_node(
         "tailoring",
         cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "cover_letter_tailoring",
+        cast(
+            "Any",
+            _llm_node_wrapper(cover_letter_tailoring_node, llm_client=llm_client),
+        ),
     )
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
@@ -182,7 +200,8 @@ def build_manual_graph(
             "notification": "notification",
         },
     )
-    graph.add_edge("tailoring", "tracking")
+    graph.add_edge("tailoring", "cover_letter_tailoring")
+    graph.add_edge("cover_letter_tailoring", "tracking")
     graph.add_edge("tracking", "notification")
     graph.add_edge("notification", END)
 

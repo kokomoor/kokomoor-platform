@@ -7,8 +7,8 @@ Automates job search, resume/cover letter tailoring, and application tracking.
 ## Pipeline Flow
 
 ```
-Default: Discovery → Filtering → Job Analysis → Tailoring → Human Review → Application → Tracking → Notification
-Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking → Notification
+Default: Discovery → Filtering → Job Analysis → Resume Tailoring → Cover-Letter Tailoring → Human Review → Application → Tracking → Notification
+Manual:  Manual Extraction (URL) → Job Analysis → Resume Tailoring → Cover-Letter Tailoring → Tracking → Notification
 ```
 
 ### Nodes
@@ -19,7 +19,8 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 | Manual Extraction (URL) | **Implemented** | Fetch direct job URL, extract and normalize a canonical `JobListing` |
 | Filtering | Implemented | Salary floor, keyword, dedup filters |
 | Job Analysis | **Implemented** | Full-JD structured extraction via LLM → `JobAnalysisResult` (themes, quals, keywords) |
-| Tailoring | **Implemented** | Plan + apply + render → `.docx` (consumes pre-computed analysis) |
+| Tailoring | **Implemented** | Resume tailoring: plan + apply + render → `.docx` (consumes pre-computed analysis) |
+| Cover-Letter Tailoring | **Implemented** | Cover-letter tailoring: structured plan + deterministic validation + `.docx` render |
 | Human Review | Planned (M4) | Email notification, approval gate |
 | Application | Planned (M4) | Playwright form-fill |
 | Tracking | Stub | SQLite persistence |
