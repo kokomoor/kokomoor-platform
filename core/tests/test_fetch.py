@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 import pytest
 import respx
@@ -15,6 +17,9 @@ from core.fetch.jsonld import (
     parse_json_ld_payload,
 )
 from core.fetch.types import FetchMethod
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 
 class TestParseJsonLdPayload:
@@ -110,13 +115,24 @@ class TestBrowserFetcher:
             async def __aenter__(self) -> _FakeBrowserManager:
                 return self
 
-            async def __aexit__(self, exc_type, exc, tb) -> None:
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc: BaseException | None,
+                tb: TracebackType | None,
+            ) -> None:
                 return None
 
             async def new_page(self) -> _FakePage:
                 return self.page
 
-            async def rate_limited_goto(self, page: _FakePage, url: str, *, timeout_ms: int | None):
+            async def rate_limited_goto(
+                self,
+                page: _FakePage,
+                url: str,
+                *,
+                timeout_ms: int | None,
+            ) -> _FakeResponse:
                 self.timeout_ms_seen = timeout_ms
                 return _FakeResponse()
 

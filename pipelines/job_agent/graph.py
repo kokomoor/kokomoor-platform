@@ -13,8 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from langgraph.graph import END
@@ -30,6 +29,8 @@ from pipelines.job_agent.nodes.tracking import tracking_node
 from pipelines.job_agent.state import JobAgentState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from core.llm.protocol import LLMClient
 
 logger = structlog.get_logger(__name__)
@@ -60,10 +61,10 @@ def _should_continue_after_job_analysis(state: JobAgentState) -> str:
 
 
 def _llm_node_wrapper(
-    node_fn: Callable[..., Awaitable[JobAgentState]],
+    node_fn: Callable[..., Coroutine[Any, Any, JobAgentState]],
     *,
     llm_client: LLMClient | None,
-) -> Callable[[JobAgentState], Awaitable[JobAgentState]]:
+) -> Callable[[JobAgentState], Coroutine[Any, Any, JobAgentState]]:
     """Wrap an LLM-backed node with optional injected client."""
 
     async def _wrapped(state: JobAgentState) -> JobAgentState:
@@ -99,8 +100,14 @@ def build_graph(
 
     graph.add_node("discovery", discovery_node)
     graph.add_node("filtering", filtering_node)
-    graph.add_node("job_analysis", _llm_node_wrapper(job_analysis_node, llm_client=llm_client))
-    graph.add_node("tailoring", _llm_node_wrapper(tailoring_node, llm_client=llm_client))
+    graph.add_node(
+        "job_analysis",
+        cast(Any, _llm_node_wrapper(job_analysis_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "tailoring",
+        cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
 
@@ -147,8 +154,14 @@ def build_manual_graph(
     )
 
     graph.add_node("manual_extraction", manual_extraction_node)
-    graph.add_node("job_analysis", _llm_node_wrapper(job_analysis_node, llm_client=llm_client))
-    graph.add_node("tailoring", _llm_node_wrapper(tailoring_node, llm_client=llm_client))
+    graph.add_node(
+        "job_analysis",
+        cast(Any, _llm_node_wrapper(job_analysis_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "tailoring",
+        cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
 

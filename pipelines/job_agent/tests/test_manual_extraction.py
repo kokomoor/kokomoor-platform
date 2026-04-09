@@ -387,7 +387,6 @@ class TestExtractionFromUrlFlow:
         assert data.metadata["extraction_winner"] == "browser"
         assert "basic qualifications" in data.cleaned_description.lower()
 
-
     @pytest.mark.asyncio
     async def test_browser_fallback_subtle_quality_difference(
         self, monkeypatch: pytest.MonkeyPatch

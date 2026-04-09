@@ -24,7 +24,9 @@ class BrowserFetcher:
         self._post_wait_ms = (
             post_wait_ms if post_wait_ms is not None else settings.fetch_browser_post_wait_ms
         )
-        self._timeout_ms = timeout_ms if timeout_ms is not None else settings.fetch_browser_timeout_ms
+        self._timeout_ms = (
+            timeout_ms if timeout_ms is not None else settings.fetch_browser_timeout_ms
+        )
 
     async def fetch(self, url: str) -> FetchResult:
         """Navigate to *url*, wait briefly for JS, return ``page.content()``."""

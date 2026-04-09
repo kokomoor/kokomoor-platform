@@ -822,14 +822,26 @@ def _html_to_text(value: str) -> str:
 
 
 def _extraction_quality_score(data: ExtractedJobData, html: str) -> int:
-    score = int(data.metadata.get("extraction_score", 0))
+    raw_score = data.metadata.get("extraction_score", 0)
+    if isinstance(raw_score, int):
+        score = raw_score
+    elif isinstance(raw_score, float):
+        score = int(raw_score)
+    else:
+        score = 0
     if data.title and data.title != "Unknown Role":
         score += 180
     if data.company and data.company != "Unknown Company":
         score += 180
     if data.location:
         score += 80
-    if data.source in {JobSource.GREENHOUSE, JobSource.LEVER, JobSource.WORKDAY, JobSource.LINKEDIN, JobSource.INDEED}:
+    if data.source in {
+        JobSource.GREENHOUSE,
+        JobSource.LEVER,
+        JobSource.WORKDAY,
+        JobSource.LINKEDIN,
+        JobSource.INDEED,
+    }:
         score += 80
     cleaned = data.cleaned_description.lower()
     if "basic qualifications" in cleaned:
