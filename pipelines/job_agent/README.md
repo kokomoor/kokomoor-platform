@@ -78,6 +78,9 @@ Key settings for this pipeline:
 - `KP_RESUME_PLAN_MODEL` — Model for tailoring plan pass (default: uses `KP_ANTHROPIC_MODEL`)
 - `KP_RESUME_PLAN_MAX_TOKENS` — Max output tokens for plan pass (default: `2048`)
 - `KP_RESUME_ENABLE_CRITIQUE` — Enable optional LLM critique pass (default: `false`)
+- `KP_COVER_LETTER_MODEL` / `KP_COVER_LETTER_MAX_TOKENS` — Cover-letter plan call model/token limits
+- `KP_COVER_LETTER_MAX_INPUT_CHARS` — Safety cap on JD length sent to cover-letter generation
+- `KP_COVER_LETTER_STYLE_GUIDE_PATH` — Externalized style guide path
 - `KP_BROWSER_HEADLESS` — Set `false` to watch browser automation
 
 Manual extraction details:

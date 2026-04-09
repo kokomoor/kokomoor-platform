@@ -86,6 +86,16 @@ def _mock_cover_letter_plan_json() -> str:
             "selected_experience_ids": ["exp_alpha", "exp_beta"],
             "selected_bullet_ids": ["alpha_platform", "alpha_cicd", "alpha_ml", "beta_pipeline"],
             "selected_education_ids": ["edu_test"],
+            "requirement_evidence": [
+                {
+                    "requirement": "Lead technical teams and ship reliable systems",
+                    "supporting_bullet_ids": ["alpha_platform", "alpha_cicd"],
+                },
+                {
+                    "requirement": "Apply machine learning in production",
+                    "supporting_bullet_ids": ["alpha_ml", "beta_pipeline"],
+                },
+            ],
             "tone_version": "confident_specific_v1",
         }
     )
@@ -96,6 +106,7 @@ def _patch_settings(tmp_path: Path) -> None:
     os.environ["KP_RESUME_MASTER_PROFILE_PATH"] = str(_FIXTURES_DIR / "master_profile.yaml")
     os.environ["KP_COVER_LETTER_OUTPUT_DIR"] = str(tmp_path / "cover_letters")
     os.environ["KP_COVER_LETTER_MAX_TOKENS"] = "2200"
+    os.environ["KP_COVER_LETTER_MAX_INPUT_CHARS"] = "12000"
     os.environ["KP_COVER_LETTER_MODEL"] = "claude-sonnet-4-20250514"
     os.environ["KP_COVER_LETTER_STYLE_GUIDE_PATH"] = str(
         Path("pipelines/job_agent/context/cover_letter_style.md")
@@ -174,6 +185,42 @@ def test_validation_rejects_placeholders() -> None:
         )
 
 
+def test_validation_rejects_banned_phrases_from_preferences() -> None:
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    assert profile.cover_letter is not None
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.opening_paragraph = (
+        "I am excited to apply for the Senior Product Manager, Autonomy role at Anduril Industries."
+    )
+
+    with pytest.raises(ValueError, match="banned phrase"):
+        validate_cover_letter_plan(
+            plan=plan,
+            profile=profile,
+            expected_company="Anduril Industries",
+            preferences=profile.cover_letter,
+        )
+
+
+def test_validation_applies_preferred_signoff() -> None:
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    assert profile.cover_letter is not None
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.signoff = "Best"
+
+    result = validate_cover_letter_plan(
+        plan=plan,
+        profile=profile,
+        expected_company="Anduril Industries",
+        preferences=profile.cover_letter,
+    )
+    assert result.plan.signoff == "Sincerely,"
+
+
 def test_renderer_layout_order(tmp_path: Path) -> None:
     from pipelines.job_agent.cover_letter.models import CoverLetterDocument
 
@@ -225,6 +272,29 @@ async def test_cover_letter_node_integration(tmp_path: Path) -> None:
     assert Path(listing.tailored_cover_letter_path).exists()
     assert listing.status == ApplicationStatus.PENDING_REVIEW
     assert len(mock_client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cover_letter_prompt_respects_input_cap(tmp_path: Path) -> None:
+    from pipelines.job_agent.nodes.cover_letter_tailoring import cover_letter_tailoring_node
+
+    _patch_settings(tmp_path)
+    os.environ["KP_COVER_LETTER_MAX_INPUT_CHARS"] = "100"
+    get_settings.cache_clear()
+
+    listing = _make_listing(dedup_key="cap_test_001")
+    listing.description = "A" * 200
+    state = JobAgentState(
+        search_criteria=SearchCriteria(),
+        qualified_listings=[listing],
+        job_analyses={listing.dedup_key: _make_analysis()},
+        run_id="test-cover-letter-cap",
+    )
+    mock_client = MockLLMClient(responses=[_mock_cover_letter_plan_json()])
+    await cover_letter_tailoring_node(state, llm_client=mock_client)
+
+    prompt = mock_client.calls[0][0]
+    assert "A" * 101 not in prompt
 
 
 @pytest.mark.asyncio
@@ -282,5 +352,15 @@ async def test_cover_letter_shape_snapshot(tmp_path: Path) -> None:
         "selected_experience_ids": ["exp_alpha", "exp_beta"],
         "selected_bullet_ids": ["alpha_platform", "alpha_cicd", "alpha_ml", "beta_pipeline"],
         "selected_education_ids": ["edu_test"],
+        "requirement_evidence": [
+            {
+                "requirement": "Lead technical teams and ship reliable systems",
+                "supporting_bullet_ids": ["alpha_platform", "alpha_cicd"],
+            },
+            {
+                "requirement": "Apply machine learning in production",
+                "supporting_bullet_ids": ["alpha_ml", "beta_pipeline"],
+            },
+        ],
         "tone_version": "confident_specific_v1",
     }

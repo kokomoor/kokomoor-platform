@@ -5,6 +5,13 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class RequirementEvidence(BaseModel):
+    """Traceability mapping from job requirement to selected profile evidence."""
+
+    requirement: str
+    supporting_bullet_ids: list[str] = Field(min_length=1)
+
+
 class CoverLetterPlan(BaseModel):
     """Structured LLM output for cover-letter generation."""
 
@@ -19,6 +26,7 @@ class CoverLetterPlan(BaseModel):
     selected_experience_ids: list[str] = Field(default_factory=list)
     selected_bullet_ids: list[str] = Field(default_factory=list)
     selected_education_ids: list[str] = Field(default_factory=list)
+    requirement_evidence: list[RequirementEvidence] = Field(default_factory=list)
     tone_version: str = ""
 
 

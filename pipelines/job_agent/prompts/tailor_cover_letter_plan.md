@@ -31,3 +31,4 @@ Hard requirements:
 3) Cover letter structure must be: salutation, opening paragraph, body paragraph(s), closing paragraph, signoff.
 4) No placeholders like [Company], [Hiring Manager], TBD, or {{variable}}.
 5) Keep claims realistic and auditable to candidate evidence.
+6) Populate requirement_evidence to map each key job requirement to supporting bullet IDs.

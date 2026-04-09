@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING
 from pipelines.job_agent.cover_letter.models import CoverLetterDocument, CoverLetterPlan
 
 if TYPE_CHECKING:
-    from pipelines.job_agent.models.resume_tailoring import ResumeMasterProfile
+    from pipelines.job_agent.models.resume_tailoring import (
+        CoverLetterPreferences,
+        ResumeMasterProfile,
+    )
 
 _PLACEHOLDER_PATTERNS = (
     r"\[company\]",
@@ -36,6 +39,7 @@ def validate_cover_letter_plan(
     plan: CoverLetterPlan,
     profile: ResumeMasterProfile,
     expected_company: str,
+    preferences: CoverLetterPreferences | None = None,
 ) -> CoverLetterValidationResult:
     """Validate, normalize, and convert an LLM plan into renderable structure."""
     normalized_plan = plan.model_copy(
@@ -53,15 +57,28 @@ def validate_cover_letter_plan(
             "selected_experience_ids": _dedupe_preserve(plan.selected_experience_ids),
             "selected_education_ids": _dedupe_preserve(plan.selected_education_ids),
             "selected_bullet_ids": _dedupe_preserve(plan.selected_bullet_ids),
+            "requirement_evidence": [
+                {
+                    "requirement": _normalize_paragraph(item.requirement),
+                    "supporting_bullet_ids": _dedupe_preserve(item.supporting_bullet_ids),
+                }
+                for item in plan.requirement_evidence
+            ],
             "tone_version": _normalize_whitespace(plan.tone_version),
         }
     )
 
+    if preferences is not None and preferences.preferred_signoff:
+        normalized_plan.signoff = _normalize_signoff(preferences.preferred_signoff)
+
     _ensure_id_references_exist(normalized_plan, profile)
+    _ensure_evidence_mapping_consistency(normalized_plan)
     _ensure_no_placeholders(normalized_plan)
     _ensure_complete_sentences(normalized_plan)
     _ensure_no_duplicate_claims(normalized_plan)
     _ensure_company_reference_is_supported(normalized_plan, expected_company)
+    _ensure_banned_phrases(normalized_plan, preferences)
+    _ensure_minimum_evidence(normalized_plan)
     _ensure_word_budget(normalized_plan)
 
     document = CoverLetterDocument(
@@ -185,3 +202,42 @@ def _ensure_word_budget(plan: CoverLetterPlan) -> None:
         raise ValueError(f"Cover letter exceeds one-page target ({len(words)} words).")
     if len(words) < _MIN_WORDS:
         raise ValueError(f"Cover letter is too short for one-page target ({len(words)} words).")
+
+
+def _ensure_banned_phrases(
+    plan: CoverLetterPlan,
+    preferences: CoverLetterPreferences | None,
+) -> None:
+    if preferences is None:
+        return
+    if not preferences.banned_phrases:
+        return
+
+    text = " ".join([plan.opening_paragraph, *plan.body_paragraphs, plan.closing_paragraph]).lower()
+    for phrase in preferences.banned_phrases:
+        candidate = phrase.strip().lower()
+        if candidate and candidate in text:
+            raise ValueError(f"Cover letter contains banned phrase: {phrase}")
+
+
+def _ensure_minimum_evidence(plan: CoverLetterPlan) -> None:
+    if len(plan.selected_bullet_ids) < 2:
+        raise ValueError("Cover letter must include at least two distinct evidence bullet IDs.")
+    if not plan.selected_experience_ids:
+        raise ValueError("Cover letter must include at least one selected experience ID.")
+
+
+def _ensure_evidence_mapping_consistency(plan: CoverLetterPlan) -> None:
+    if not plan.requirement_evidence:
+        raise ValueError("Cover letter must include requirement_evidence mapping.")
+
+    selected_ids = set(plan.selected_bullet_ids)
+    for mapping in plan.requirement_evidence:
+        if not mapping.requirement:
+            raise ValueError("Each requirement_evidence entry must include a requirement.")
+        missing = [bid for bid in mapping.supporting_bullet_ids if bid not in selected_ids]
+        if missing:
+            raise ValueError(
+                "Requirement evidence references bullet IDs not present in selected_bullet_ids: "
+                f"{missing}"
+            )

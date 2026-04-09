@@ -42,7 +42,7 @@ _ENGINE: TailoringEngine[
 ] = TailoringEngine()
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Runtime:
     settings: Settings
     output_dir: Path
@@ -52,6 +52,7 @@ class _Runtime:
     sender_location: str
     sender_email: str
     sender_phone: str
+    normalized_plans: dict[str, CoverLetterPlan]
 
 
 def _build_spec() -> TailoringSpec[
@@ -121,6 +122,7 @@ def _prepare_runtime(state: JobAgentState) -> _Runtime:
         sender_location=profile.location,
         sender_email=profile.email,
         sender_phone=profile.phone,
+        normalized_plans={},
     )
 
 
@@ -172,7 +174,7 @@ def _build_prompt(
         template=runtime.prompt_template,
         job_title=listing.title,
         company=listing.company,
-        job_description=listing.description,
+        job_description=listing.description[: runtime.settings.cover_letter_max_input_chars],
         job_analysis=analysis,
         inventory_view=inventory_view,
         style_guide=runtime.style_guide,
@@ -185,25 +187,15 @@ def _validate_plan(
     _analysis: JobAnalysisResult,
     profile: ResumeMasterProfile,
     plan: CoverLetterPlan,
-    _runtime: _Runtime,
+    runtime: _Runtime,
 ) -> None:
     validated = validate_cover_letter_plan(
         plan=plan,
         profile=profile,
         expected_company=listing.company,
+        preferences=profile.cover_letter,
     )
-    plan.salutation = validated.plan.salutation
-    plan.opening_paragraph = validated.plan.opening_paragraph
-    plan.body_paragraphs = validated.plan.body_paragraphs
-    plan.closing_paragraph = validated.plan.closing_paragraph
-    plan.signoff = validated.plan.signoff
-    plan.signature_name = validated.plan.signature_name
-    plan.company_motivation = validated.plan.company_motivation
-    plan.job_requirements_addressed = validated.plan.job_requirements_addressed
-    plan.selected_experience_ids = validated.plan.selected_experience_ids
-    plan.selected_bullet_ids = validated.plan.selected_bullet_ids
-    plan.selected_education_ids = validated.plan.selected_education_ids
-    plan.tone_version = validated.plan.tone_version
+    runtime.normalized_plans[listing.dedup_key] = validated.plan
 
 
 def _apply_plan(
@@ -212,9 +204,10 @@ def _apply_plan(
     _analysis: JobAnalysisResult,
     _profile: ResumeMasterProfile,
     plan: CoverLetterPlan,
-    _runtime: _Runtime,
+    runtime: _Runtime,
 ) -> CoverLetterDocument:
-    return apply_cover_letter_plan(plan)
+    normalized_plan = runtime.normalized_plans.get(_listing.dedup_key, plan)
+    return apply_cover_letter_plan(normalized_plan)
 
 
 def _get_output_path(state: JobAgentState, listing: JobListing, runtime: _Runtime) -> Path:
@@ -246,8 +239,9 @@ def _on_item_success(
     _plan: CoverLetterPlan,
     _document: CoverLetterDocument,
     output_path: Path,
-    _runtime: _Runtime,
+    runtime: _Runtime,
 ) -> None:
+    runtime.normalized_plans.pop(listing.dedup_key, None)
     listing.tailored_cover_letter_path = str(output_path)
     listing.status = ApplicationStatus.PENDING_REVIEW
 
@@ -256,8 +250,9 @@ def _on_item_error(
     state: JobAgentState,
     listing: JobListing,
     exc: Exception,
-    _runtime: _Runtime,
+    runtime: _Runtime,
 ) -> None:
+    runtime.normalized_plans.pop(listing.dedup_key, None)
     listing.status = ApplicationStatus.ERRORED
     state.errors.append(
         {

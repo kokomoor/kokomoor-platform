@@ -185,6 +185,11 @@ class Settings(BaseSettings):
         ge=512,
         description="Max output tokens for the cover-letter structured plan call.",
     )
+    cover_letter_max_input_chars: int = Field(
+        default=12_000,
+        ge=2000,
+        description="Safety cap on job-description chars sent to the cover-letter LLM call.",
+    )
     cover_letter_style_guide_path: str = Field(
         default=str(
             _PROJECT_ROOT / "pipelines" / "job_agent" / "context" / "cover_letter_style.md"
