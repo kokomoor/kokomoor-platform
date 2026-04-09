@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
-    from pipelines.job_agent.models.resume_tailoring import ResumeMasterProfile
+    from pipelines.job_agent.models.resume_tailoring import (
+        MasterBullet,
+        ResumeMasterProfile,
+    )
 
 logger = structlog.get_logger(__name__)
 
@@ -22,8 +25,19 @@ No em dashes or en dashes in prose.
 """
 
 
-def format_cover_letter_inventory(profile: ResumeMasterProfile) -> str:
-    """Render concise profile evidence with stable IDs for reference checks."""
+def format_cover_letter_inventory(
+    profile: ResumeMasterProfile,
+    *,
+    relevant_tags: set[str] | None = None,
+) -> str:
+    """Render concise profile evidence with stable IDs for reference checks.
+
+    Args:
+        profile: The loaded master resume profile.
+        relevant_tags: If provided, only include bullets whose tags overlap
+            with this set. Sections with no remaining bullets are omitted.
+            Passing ``None`` includes everything (full profile).
+    """
     lines: list[str] = []
 
     lines.append(f"Candidate: {profile.name}")
@@ -53,15 +67,21 @@ def format_cover_letter_inventory(profile: ResumeMasterProfile) -> str:
 
     lines.append("EXPERIENCE EVIDENCE:")
     for exp in profile.experience:
+        filtered = _filter_bullets(exp.bullets, relevant_tags)
+        if not filtered and relevant_tags is not None:
+            continue
         lines.append(f"[{exp.id}] {exp.company} | {exp.title} | {exp.dates}")
-        for bullet in exp.bullets:
+        for bullet in filtered:
             lines.append(f"  - [{bullet.id}] {bullet.text}")
     lines.append("")
 
     lines.append("EDUCATION EVIDENCE:")
     for edu in profile.education:
+        filtered = _filter_bullets(edu.bullets, relevant_tags)
+        if not filtered and relevant_tags is not None:
+            continue
         lines.append(f"[{edu.id}] {edu.school} | {edu.degree} | {edu.graduation}")
-        for bullet in edu.bullets:
+        for bullet in filtered:
             lines.append(f"  - [{bullet.id}] {bullet.text}")
 
     return "\n".join(lines)
@@ -79,6 +99,16 @@ def load_cover_letter_style_guide(path: Path) -> str:
         return _DEFAULT_STYLE_GUIDE
 
     return content
+
+
+def _filter_bullets(
+    bullets: list[MasterBullet],
+    relevant_tags: set[str] | None,
+) -> list[MasterBullet]:
+    """Return bullets matching *relevant_tags*, or all if tags is None."""
+    if relevant_tags is None:
+        return bullets
+    return [b for b in bullets if set(b.tags) & relevant_tags]
 
 
 def _append_list(lines: list[str], label: str, values: list[str]) -> None:

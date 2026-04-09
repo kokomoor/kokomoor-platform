@@ -55,8 +55,9 @@ def _mock_cover_letter_plan_json() -> str:
         {
             "salutation": "Dear Hiring Manager,",
             "opening_paragraph": (
-                "I am applying for the Senior Product Manager, Autonomy role at Anduril Industries. "
-                "I have led technical programs where mission urgency and execution discipline mattered."
+                "The Senior Product Manager, Autonomy role at Anduril Industries sits at the "
+                "intersection of what I have spent my career building: reliable technical systems "
+                "in high-stakes environments where execution discipline matters."
             ),
             "body_paragraphs": [
                 (
@@ -77,7 +78,10 @@ def _mock_cover_letter_plan_json() -> str:
             ),
             "signoff": "Sincerely,",
             "signature_name": "Test Candidate",
-            "company_motivation": "I want to contribute to Anduril Industries and its mission.",
+            "company_motivation": (
+                "Anduril Industries applies advanced engineering to urgent national security "
+                "challenges, building autonomous systems that protect service members in the field."
+            ),
             "job_requirements_addressed": [
                 "technical leadership",
                 "reliable delivery",
@@ -96,7 +100,7 @@ def _mock_cover_letter_plan_json() -> str:
                     "supporting_bullet_ids": ["alpha_ml", "beta_pipeline"],
                 },
             ],
-            "tone_version": "confident_specific_v1",
+            "tone_version": "confident_direct",
         }
     )
 
@@ -143,6 +147,35 @@ def test_inventory_graceful_without_cover_letter_section(tmp_path: Path) -> None
     assert "COVER LETTER PREFERENCES" not in text
 
 
+def test_inventory_tag_filtering() -> None:
+    """Context pruning omits bullets whose tags don't overlap with relevant_tags."""
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    full_text = format_cover_letter_inventory(profile)
+    pruned_text = format_cover_letter_inventory(profile, relevant_tags={"ml"})
+    assert len(pruned_text) < len(full_text)
+    assert "alpha_ml" in pruned_text
+    assert "alpha_cicd" not in pruned_text
+
+
+def test_validation_happy_path() -> None:
+    """Full validation succeeds on a well-formed plan with no warnings."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    result = validate_cover_letter_plan(
+        plan=plan,
+        profile=profile,
+        expected_company="Anduril Industries",
+    )
+    assert result.document.salutation == "Dear Hiring Manager,"
+    assert result.document.signoff == "Sincerely,"
+    assert len(result.document.body_paragraphs) == 2
+    assert len(result.plan.requirement_evidence) == 2
+    assert result.plan.requirement_evidence[0].requirement
+    assert result.plan.tone_version == "confident_direct"
+
+
 def test_validation_rejects_unknown_ids() -> None:
     from pipelines.job_agent.cover_letter.models import CoverLetterPlan
 
@@ -161,7 +194,7 @@ def test_validation_normalizes_dashes_and_signoff() -> None:
 
     profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
     plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
-    plan.body_paragraphs[0] = "This paragraph has em dash — that must be cleaned."
+    plan.body_paragraphs[0] = "This paragraph has em dash \u2014 that must be cleaned."
     plan.signoff = "Regards"
     result = validate_cover_letter_plan(
         plan=plan,
@@ -177,7 +210,7 @@ def test_validation_rejects_placeholders() -> None:
 
     profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
     plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
-    plan.opening_paragraph = "I am excited to apply to [Company]."
+    plan.opening_paragraph = "The role at [Company] is compelling because of its mission focus."
 
     with pytest.raises(ValueError, match="placeholder"):
         validate_cover_letter_plan(
@@ -185,17 +218,36 @@ def test_validation_rejects_placeholders() -> None:
         )
 
 
-def test_validation_rejects_banned_phrases_from_preferences() -> None:
+def test_validation_rejects_core_banned_phrase() -> None:
+    """Core banned phrases cause hard failure regardless of preferences."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.body_paragraphs[0] = (
+        "I am passionate about building reliable systems. At Alpha Corp, I led development "
+        "of a microservices platform serving 10M+ requests per day across 15 services."
+    )
+
+    with pytest.raises(ValueError, match="banned phrase"):
+        validate_cover_letter_plan(
+            plan=plan, profile=profile, expected_company="Anduril Industries"
+        )
+
+
+def test_validation_rejects_profile_banned_phrase() -> None:
+    """Profile-level banned phrases also cause hard failure."""
     from pipelines.job_agent.cover_letter.models import CoverLetterPlan
 
     profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
     assert profile.cover_letter is not None
     plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
-    plan.opening_paragraph = (
-        "I am excited to apply for the Senior Product Manager, Autonomy role at Anduril Industries."
+    plan.body_paragraphs[0] = (
+        "I want to leverage my background to build microservices platform serving 10M+ "
+        "requests per day and improve deployment velocity by 70% through CI/CD automation."
     )
 
-    with pytest.raises(ValueError, match="banned phrase"):
+    with pytest.raises(ValueError, match="profile-banned phrase"):
         validate_cover_letter_plan(
             plan=plan,
             profile=profile,
@@ -219,6 +271,29 @@ def test_validation_applies_preferred_signoff() -> None:
         preferences=profile.cover_letter,
     )
     assert result.plan.signoff == "Sincerely,"
+
+
+def test_validation_warns_on_missing_company_in_body() -> None:
+    """Company missing from letter body produces a warning."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.opening_paragraph = (
+        "I am applying for the Senior Product Manager, Autonomy role. "
+        "I have led technical programs where mission urgency mattered."
+    )
+    plan.closing_paragraph = (
+        "I would value the chance to help translate operator needs into "
+        "deployable autonomy products at this company."
+    )
+
+    result = validate_cover_letter_plan(
+        plan=plan,
+        profile=profile,
+        expected_company="Anduril Industries",
+    )
+    assert any("body does not mention" in w for w in result.warnings)
 
 
 def test_renderer_layout_order(tmp_path: Path) -> None:
@@ -267,7 +342,7 @@ async def test_cover_letter_node_integration(tmp_path: Path) -> None:
 
     result = await cover_letter_tailoring_node(state, llm_client=mock_client)
 
-    assert result.phase == PipelinePhase.TAILORING
+    assert result.phase == PipelinePhase.COVER_LETTER_TAILORING
     assert listing.tailored_cover_letter_path is not None
     assert Path(listing.tailored_cover_letter_path).exists()
     assert listing.status == ApplicationStatus.PENDING_REVIEW
@@ -279,11 +354,11 @@ async def test_cover_letter_prompt_respects_input_cap(tmp_path: Path) -> None:
     from pipelines.job_agent.nodes.cover_letter_tailoring import cover_letter_tailoring_node
 
     _patch_settings(tmp_path)
-    os.environ["KP_COVER_LETTER_MAX_INPUT_CHARS"] = "100"
+    os.environ["KP_COVER_LETTER_MAX_INPUT_CHARS"] = "2000"
     get_settings.cache_clear()
 
     listing = _make_listing(dedup_key="cap_test_001")
-    listing.description = "A" * 200
+    listing.description = "A" * 5000
     state = JobAgentState(
         search_criteria=SearchCriteria(),
         qualified_listings=[listing],
@@ -294,7 +369,7 @@ async def test_cover_letter_prompt_respects_input_cap(tmp_path: Path) -> None:
     await cover_letter_tailoring_node(state, llm_client=mock_client)
 
     prompt = mock_client.calls[0][0]
-    assert "A" * 101 not in prompt
+    assert "A" * 2001 not in prompt
 
 
 @pytest.mark.asyncio
@@ -325,8 +400,9 @@ async def test_cover_letter_shape_snapshot(tmp_path: Path) -> None:
     assert parsed.model_dump() == {
         "salutation": "Dear Hiring Manager,",
         "opening_paragraph": (
-            "I am applying for the Senior Product Manager, Autonomy role at Anduril Industries. "
-            "I have led technical programs where mission urgency and execution discipline mattered."
+            "The Senior Product Manager, Autonomy role at Anduril Industries sits at the "
+            "intersection of what I have spent my career building: reliable technical systems "
+            "in high-stakes environments where execution discipline matters."
         ),
         "body_paragraphs": [
             (
@@ -347,7 +423,10 @@ async def test_cover_letter_shape_snapshot(tmp_path: Path) -> None:
         ),
         "signoff": "Sincerely,",
         "signature_name": "Test Candidate",
-        "company_motivation": "I want to contribute to Anduril Industries and its mission.",
+        "company_motivation": (
+            "Anduril Industries applies advanced engineering to urgent national security "
+            "challenges, building autonomous systems that protect service members in the field."
+        ),
         "job_requirements_addressed": ["technical leadership", "reliable delivery", "ml systems"],
         "selected_experience_ids": ["exp_alpha", "exp_beta"],
         "selected_bullet_ids": ["alpha_platform", "alpha_cicd", "alpha_ml", "beta_pipeline"],
@@ -362,5 +441,127 @@ async def test_cover_letter_shape_snapshot(tmp_path: Path) -> None:
                 "supporting_bullet_ids": ["alpha_ml", "beta_pipeline"],
             },
         ],
-        "tone_version": "confident_specific_v1",
+        "tone_version": "confident_direct",
     }
+
+
+def test_validation_rejects_generic_opener() -> None:
+    """Letters starting with stock openers are rejected."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.opening_paragraph = (
+        "I am writing to express my interest in the Senior Product Manager role "
+        "at Anduril Industries. I have led microservices platform development."
+    )
+
+    with pytest.raises(ValueError, match="generic opener"):
+        validate_cover_letter_plan(
+            plan=plan, profile=profile, expected_company="Anduril Industries"
+        )
+
+
+def test_validation_rejects_shallow_company_motivation() -> None:
+    """company_motivation with too few words is rejected."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.company_motivation = "I like Anduril."
+
+    with pytest.raises(ValueError, match="company_motivation must contain"):
+        validate_cover_letter_plan(
+            plan=plan, profile=profile, expected_company="Anduril Industries"
+        )
+
+
+def test_validation_rejects_ungrounded_evidence() -> None:
+    """Body that cites bullet IDs but contains no specific terms from them is rejected."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.body_paragraphs = [
+        "I have strong experience in building systems and leading teams to success.",
+        "My work has consistently delivered value across multiple organizations.",
+    ]
+
+    with pytest.raises(ValueError, match="lacks specific evidence"):
+        validate_cover_letter_plan(
+            plan=plan, profile=profile, expected_company="Anduril Industries"
+        )
+
+
+def test_validation_warns_on_ai_tell_density() -> None:
+    """Multiple AI-tell words generate a warning."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+    from pipelines.job_agent.cover_letter.validation import AI_TELL_WORDS
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    ai_words = list(AI_TELL_WORDS[:4])
+    plan.body_paragraphs[0] = (
+        f"I want to {ai_words[0]} into the {ai_words[1]} of microservices platform "
+        f"serving 10M+ requests, a {ai_words[2]} achievement. This {ai_words[3]} "
+        "outcome improved deployment velocity by 70% through CI/CD automation."
+    )
+
+    result = validate_cover_letter_plan(
+        plan=plan, profile=profile, expected_company="Anduril Industries"
+    )
+    assert any("AI-tell words" in w for w in result.warnings)
+
+
+def test_validation_warns_on_motivation_body_mismatch() -> None:
+    """company_motivation substance not reflected in body produces warning."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+    plan.company_motivation = (
+        "Anduril Industries is revolutionizing counter-drone warfare and maritime "
+        "surveillance through lattice-enabled autonomous platforms deployed globally."
+    )
+
+    result = validate_cover_letter_plan(
+        plan=plan, profile=profile, expected_company="Anduril Industries"
+    )
+    assert any("company_motivation reasoning" in w for w in result.warnings)
+
+
+def test_tone_version_rejects_invalid_value() -> None:
+    """Invalid tone_version value fails Pydantic validation."""
+    from pydantic import ValidationError
+
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    raw = json.loads(_mock_cover_letter_plan_json())
+    raw["tone_version"] = "casual_bro_v1"
+
+    with pytest.raises(ValidationError):
+        CoverLetterPlan.model_validate(raw)
+
+
+def test_tone_version_accepts_all_valid_values() -> None:
+    """All defined tone versions parse successfully."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    for tone in ("confident_direct", "professional_narrative", "technical_precise"):
+        raw = json.loads(_mock_cover_letter_plan_json())
+        raw["tone_version"] = tone
+        parsed = CoverLetterPlan.model_validate(raw)
+        assert parsed.tone_version == tone
+
+
+def test_evidence_grounding_passes_with_specific_terms() -> None:
+    """Body containing specific terms from cited bullets passes grounding check."""
+    from pipelines.job_agent.cover_letter.models import CoverLetterPlan
+
+    profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
+    plan = CoverLetterPlan.model_validate_json(_mock_cover_letter_plan_json())
+
+    result = validate_cover_letter_plan(
+        plan=plan, profile=profile, expected_company="Anduril Industries"
+    )
+    assert not any("lacks specific evidence" in w for w in result.warnings)

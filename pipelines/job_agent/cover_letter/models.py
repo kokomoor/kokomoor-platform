@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+ToneVersion = Literal["confident_direct", "professional_narrative", "technical_precise"]
 
 
 class RequirementEvidence(BaseModel):
@@ -21,13 +25,13 @@ class CoverLetterPlan(BaseModel):
     closing_paragraph: str
     signoff: str
     signature_name: str
-    company_motivation: str
+    company_motivation: str = Field(min_length=1)
     job_requirements_addressed: list[str] = Field(default_factory=list)
     selected_experience_ids: list[str] = Field(default_factory=list)
     selected_bullet_ids: list[str] = Field(default_factory=list)
     selected_education_ids: list[str] = Field(default_factory=list)
     requirement_evidence: list[RequirementEvidence] = Field(default_factory=list)
-    tone_version: str = ""
+    tone_version: ToneVersion = "confident_direct"
 
 
 class CoverLetterDocument(BaseModel):

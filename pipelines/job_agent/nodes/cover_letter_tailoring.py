@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +22,7 @@ from pipelines.job_agent.cover_letter.validation import validate_cover_letter_pl
 from pipelines.job_agent.models import ApplicationStatus
 from pipelines.job_agent.resume.profile import load_master_profile
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
+from pipelines.job_agent.utils import expand_domain_tags, positioning_rules, safe_filename
 
 if TYPE_CHECKING:
     from core.llm.protocol import LLMClient
@@ -48,11 +49,8 @@ class _Runtime:
     output_dir: Path
     style_guide: str
     prompt_template: str
-    sender_name: str
-    sender_location: str
-    sender_email: str
-    sender_phone: str
-    normalized_plans: dict[str, CoverLetterPlan]
+    profile: ResumeMasterProfile
+    normalized_plans: dict[str, CoverLetterPlan] = field(default_factory=dict)
 
 
 def _build_spec() -> TailoringSpec[
@@ -96,7 +94,7 @@ async def cover_letter_tailoring_node(
     llm_client: LLMClient | None = None,
 ) -> JobAgentState:
     """Generate cover letters per listing with one structured Sonnet call each."""
-    state.phase = PipelinePhase.TAILORING
+    state.phase = PipelinePhase.COVER_LETTER_TAILORING
 
     if llm_client is None:
         from core.llm import AnthropicClient
@@ -118,11 +116,7 @@ def _prepare_runtime(state: JobAgentState) -> _Runtime:
         output_dir=output_dir,
         style_guide=style_guide,
         prompt_template=prompt_template,
-        sender_name=profile.name,
-        sender_location=profile.location,
-        sender_email=profile.email,
-        sender_phone=profile.phone,
-        normalized_plans={},
+        profile=profile,
     )
 
 
@@ -134,7 +128,7 @@ def _on_skip(state: JobAgentState) -> None:
 
 
 def _load_profile(_state: JobAgentState, runtime: _Runtime) -> ResumeMasterProfile:
-    return load_master_profile(Path(runtime.settings.resume_master_profile_path))
+    return runtime.profile
 
 
 def _on_missing_context(state: JobAgentState, listing: JobListing, _runtime: _Runtime) -> None:
@@ -154,12 +148,20 @@ def _on_item_start(_state: JobAgentState, listing: JobListing, _runtime: _Runtim
 
 def _build_inventory_view(
     _state: JobAgentState,
-    _listing: JobListing,
-    _analysis: JobAnalysisResult,
+    listing: JobListing,
+    analysis: JobAnalysisResult,
     profile: ResumeMasterProfile,
     _runtime: _Runtime,
 ) -> str:
-    return format_cover_letter_inventory(profile)
+    relevant_tags = expand_domain_tags(analysis.domain_tags)
+    text = format_cover_letter_inventory(profile, relevant_tags=relevant_tags)
+    logger.debug(
+        "cover_letter.context_pruned",
+        dedup_key=listing.dedup_key,
+        relevant_tags=sorted(relevant_tags),
+        inventory_chars=len(text),
+    )
+    return text
 
 
 def _build_prompt(
@@ -178,6 +180,7 @@ def _build_prompt(
         job_analysis=analysis,
         inventory_view=inventory_view,
         style_guide=runtime.style_guide,
+        positioning_rules=positioning_rules(analysis.domain_tags),
     )
 
 
@@ -196,6 +199,12 @@ def _validate_plan(
         preferences=profile.cover_letter,
     )
     runtime.normalized_plans[listing.dedup_key] = validated.plan
+    if validated.warnings:
+        logger.warning(
+            "cover_letter.validation_warnings",
+            dedup_key=listing.dedup_key,
+            warnings=validated.warnings,
+        )
 
 
 def _apply_plan(
@@ -211,8 +220,10 @@ def _apply_plan(
 
 
 def _get_output_path(state: JobAgentState, listing: JobListing, runtime: _Runtime) -> Path:
-    safe = _safe_filename(listing.company, listing.title, listing.dedup_key)
-    return runtime.output_dir / f"{safe}.docx"
+    return (
+        runtime.output_dir
+        / f"{safe_filename(listing.company, listing.title, listing.dedup_key)}.docx"
+    )
 
 
 def _render_document(
@@ -226,10 +237,10 @@ def _render_document(
         document,
         output_path,
         signature_name=document.signature_name,
-        sender_name=runtime.sender_name,
-        sender_location=runtime.sender_location,
-        sender_email=runtime.sender_email,
-        sender_phone=runtime.sender_phone,
+        sender_name=runtime.profile.name,
+        sender_location=runtime.profile.location,
+        sender_email=runtime.profile.email,
+        sender_phone=runtime.profile.phone,
     )
 
 
@@ -270,12 +281,6 @@ def _on_complete(state: JobAgentState, _runtime: _Runtime) -> None:
         rendered=sum(1 for item in state.qualified_listings if item.tailored_cover_letter_path),
         errors=len(state.errors),
     )
-
-
-def _safe_filename(company: str, title: str, dedup_key: str) -> str:
-    raw = f"{company}_{title}".replace(" ", "_")
-    safe = "".join(c for c in raw if c.isalnum() or c in ("_", "-"))
-    return f"{safe[:50]}_{dedup_key[:8]}"
 
 
 COVER_LETTER_TAILORING_SPEC = _build_spec()

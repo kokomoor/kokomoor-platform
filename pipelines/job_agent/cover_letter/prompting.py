@@ -17,6 +17,7 @@ def build_cover_letter_prompt(
     job_analysis: JobAnalysisResult,
     inventory_view: str,
     style_guide: str,
+    positioning_rules: str = "",
 ) -> str:
     """Build one-pass prompt from template + style/context data."""
     return template.format(
@@ -26,4 +27,5 @@ def build_cover_letter_prompt(
         job_analysis=job_analysis.model_dump_json(indent=2),
         candidate_inventory=inventory_view,
         style_guide=style_guide,
+        positioning_rules=positioning_rules,
     )

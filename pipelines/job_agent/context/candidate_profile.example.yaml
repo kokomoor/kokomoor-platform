@@ -45,7 +45,7 @@ skills:
   tools: [Git]
 
 cover_letter:
-  preferred_tone: "Confident, respectful, and specific."
+  preferred_tone: "Direct, confident, human. Professional but not stiff."
   preferred_signoff: "Sincerely,"
   positioning_angles:
     - "Bridge technical depth and product judgment."
@@ -65,8 +65,12 @@ cover_letter:
   style_preferences:
     - "Concrete, metric-backed examples."
     - "Natural business-letter flow."
+    - "Vary sentence length."
   banned_phrases:
     - "I am excited to apply"
     - "team player"
+    - "proven track record"
+    - "hit the ground running"
+    - "detail-oriented"
   narrative_themes:
     - "Hands-on builder who can also set direction."

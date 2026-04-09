@@ -10,7 +10,7 @@ from pathlib import Path  # noqa: TC003 — used at runtime
 from typing import Any
 
 import structlog
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from pipelines.job_agent.models.resume_tailoring import MasterBullet, ResumeMasterProfile
 

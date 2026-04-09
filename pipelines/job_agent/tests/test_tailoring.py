@@ -26,11 +26,11 @@ from pipelines.job_agent.models.resume_tailoring import (
     TailoredExperience,
     TailoredResumeDocument,
 )
-from pipelines.job_agent.nodes.tailoring import _expand_domain_tags
 from pipelines.job_agent.resume.applier import apply_tailoring_plan
 from pipelines.job_agent.resume.profile import format_profile_for_llm, load_master_profile
 from pipelines.job_agent.resume.renderer import render_resume_docx
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
+from pipelines.job_agent.utils import expand_domain_tags
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -225,24 +225,24 @@ class TestTagExpansion:
     """Tests for domain tag expansion to profile tag vocabulary."""
 
     def test_direct_tags_preserved(self) -> None:
-        result = _expand_domain_tags(["defense", "ml"])
+        result = expand_domain_tags(["defense", "ml"])
         assert "defense" in result
         assert "ml" in result
 
     def test_synonyms_expanded(self) -> None:
-        result = _expand_domain_tags(["military"])
+        result = expand_domain_tags(["military"])
         assert "defense" in result
         assert "naval" in result
 
     def test_always_relevant_tags_included(self) -> None:
-        result = _expand_domain_tags(["finance"])
+        result = expand_domain_tags(["finance"])
         assert "leadership" in result
         assert "technical" in result
         assert "management" in result
         assert "software" in result
 
     def test_case_insensitive(self) -> None:
-        result = _expand_domain_tags(["Defense", "ML"])
+        result = expand_domain_tags(["Defense", "ML"])
         assert "defense" in result
         assert "ml" in result
 

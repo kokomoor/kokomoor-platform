@@ -5,8 +5,8 @@ Job search automation pipeline. Discovers listings, filters by criteria, analyse
 ## Pipeline flow
 
 ```
-Default: Discovery → Filtering → Job Analysis → Tailoring → Human Review → Application → Tracking → Notification
-Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking → Notification
+Default: Discovery → Filtering → Job Analysis → Tailoring → Cover Letter Tailoring → Human Review → Application → Tracking → Notification
+Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Cover Letter Tailoring → Tracking → Notification
 ```
 
 ## Current status
@@ -18,6 +18,7 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 | Filtering | **Implemented** | Salary floor filter. Keyword/role filters planned. |
 | Job Analysis | **Implemented** | Dedicated LLM node: full JD → `JobAnalysisResult` (themes, quals, keywords). Stored on `state.job_analyses`. |
 | Tailoring | **Implemented** | Plan pass only (1 LLM call), consumes pre-computed analysis from state. Render → `.docx`. |
+| Cover Letter Tailoring | **Implemented** | 1 structured LLM call per listing. Validated against banned phrases, prose grounding, and evidence mapping. Render → `.docx`. |
 | Human Review | **Planned (M4)** | Email notification, approval gate |
 | Application | **Planned (M4)** | Playwright form-fill |
 | Tracking | **Stub** | Logs only. M2: upsert via `core.database` |
@@ -34,10 +35,14 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 | `models/resume_tailoring.py` | `JobAnalysisResult`, `ResumeTailoringPlan`, master profile types — shared contract between job-analysis and tailoring nodes |
 | `nodes/` | One file per node — pure `async (state) -> state` functions |
 | `nodes/job_analysis.py` | Job analysis node: full JD → structured `JobAnalysisResult` via LLM |
+| `nodes/cover_letter_tailoring.py` | Cover letter tailoring node: 1 LLM call per listing → validated `.docx` |
 | `extraction/` | Job-specific URL → `JobListing` (layered parsing); **transport** via `core.fetch`; `inspection.py` writes markdown artifacts for manual review |
-| `resume/` | Tailoring subsystem: profile loading, plan application, `.docx` rendering |
+| `resume/` | Resume tailoring subsystem: profile loading, plan application, `.docx` rendering |
+| `cover_letter/` | Cover letter subsystem: models, prompting, validation, applier, `.docx` rendering |
+| `utils.py` | Shared utilities: tag expansion, positioning rules, safe filenames |
 | `prompts/` | Markdown templates with `{placeholder}` format strings |
-| `context/candidate_profile.yaml` | Structured candidate data consumed by the Tailoring node (gitignored) |
+| `context/candidate_profile.yaml` | Structured candidate data consumed by the Tailoring node (gitignored). Includes `cover_letter` section for voice/style preferences. |
+| `context/cover_letter_style.md` | Cover letter style guide with voice benchmarks from reference letters |
 | `tools/` | LLM tool definitions (currently empty) |
 | `tests/` | Unit tests with `MockLLMClient` and no real API calls |
 
@@ -53,7 +58,7 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Tracking →
 - **Anti-detection is mandatory.** All browser interactions go through `core.browser.BrowserManager`. Use `rate_limited_goto()` and `human_delay()`. Never raw Playwright.
 - **Prefer APIs/aggregators** over scraping where available. Discovery should check RSS feeds or public APIs before falling back to browser scraping.
 - **Extractor contract:** fetch with original URL, canonicalize the resolved final URL for provider/source detection and dedup, score description candidates by quality (structured/provider/generic/fallback), and keep `JobListing.description` as cleaned canonical text. Raw extracted text is preserved in notes for debugging.
-- **Status transitions:** `DISCOVERED → ANALYZING → ANALYZED → TAILORING → PENDING_REVIEW` (or `ERRORED` at any failure point). Analysis/tailoring failures set `ApplicationStatus.ERRORED`; avoid logic that assumes all qualified listings become tailored.
+- **Status transitions:** `DISCOVERED → ANALYZING → ANALYZED → TAILORING → COVER_LETTER_TAILORING → PENDING_REVIEW` (or `ERRORED` at any failure point). Analysis/tailoring failures set `ApplicationStatus.ERRORED`; avoid logic that assumes all qualified listings become tailored.
 
 ## Job analysis node
 
@@ -96,13 +101,14 @@ The master profile YAML uses **schema v1**: each bullet has a stable `id`, `tags
 | Plan max tokens | `KP_RESUME_PLAN_MAX_TOKENS` | `2048` | Caps output length for plan JSON |
 | Context pruning | automatic | always on | Only profile bullets whose tags match the analysis domain tags are sent to the plan pass |
 
-Context pruning: the `format_profile_for_llm` function accepts a `relevant_tags` set. The node expands the analysis `domain_tags` via `_TAG_EXPANSION` (synonym mapping) and adds universally-relevant tags (`leadership`, `technical`, etc.) so important bullets are never dropped. Sections with no matching bullets are omitted entirely, reducing prompt tokens.
+Context pruning: the profile formatter functions accept a `relevant_tags` set. Both tailoring nodes expand the analysis `domain_tags` via `expand_domain_tags()` in `utils.py` (synonym mapping + universally-relevant tags like `leadership`, `technical`) so important bullets are never dropped. Sections with no matching bullets are omitted entirely, reducing prompt tokens.
 
 ### Resume models (`models/resume_tailoring.py`)
 
 | Model | Purpose |
 |-------|---------|
 | `ResumeMasterProfile` | Loaded from YAML — all possible bullets with IDs, tags, locations, subtitles |
+| `CoverLetterPreferences` | Optional profile knobs for cover-letter voice, banned phrases, positioning angles, narrative themes |
 | `JobAnalysisResult` | Job-analysis node output — themes, seniority, domain tags, basic/preferred qualifications |
 | `ResumeTailoringPlan` | Tailoring plan pass output — bullet selection, ordering, ops |
 | `TailoredResumeDocument` | Post-application structure with location/subtitle/additional_info, input to `.docx` renderer |
@@ -115,9 +121,70 @@ Context pruning: the `format_profile_for_llm` function accepts a `relevant_tags`
 | `applier.py` | Pure function: `(profile, plan) → TailoredResumeDocument` with location/subtitle passthrough |
 | `renderer.py` | `TailoredResumeDocument → .docx` matching Kokomoor template (Times New Roman, section borders, tab-aligned dates) |
 
-### Renderer format spec
+## Cover letter tailoring node
 
-The renderer produces `.docx` files matching the Kokomoor resume template (Feb/Sep/Mar reference documents):
+Runs after resume tailoring. Consumes the same `JobAnalysisResult` from `state.job_analyses`. One structured LLM call per listing producing a `CoverLetterPlan`, which is validated, applied, and rendered to `.docx`.
+
+### Cover letter package (`cover_letter/`)
+
+| File | Role |
+|------|------|
+| `models.py` | `CoverLetterPlan` (LLM output), `CoverLetterDocument` (renderer input), `RequirementEvidence`, `ToneVersion` literal |
+| `prompting.py` | `build_cover_letter_prompt()` — assembles template + style guide + inventory + analysis |
+| `profile.py` | `format_cover_letter_inventory()` — profile evidence with IDs for cover letters; `load_cover_letter_style_guide()` |
+| `validation.py` | Normalization + two-tier validation (hard failures + soft warnings) |
+| `applier.py` | `apply_cover_letter_plan()` — plan → document passthrough |
+| `renderer.py` | `render_cover_letter_docx()` — business-letter `.docx` (Times New Roman 11pt, standard margins) |
+
+### Validation architecture
+
+Two categories of checks, run in order after normalization:
+
+**Hard checks (ValueError → listing ERRORs):**
+- ID references exist in profile
+- Evidence mapping consistency (requirement_evidence IDs ⊆ selected_bullet_ids)
+- No placeholders (`[Company]`, `{{var}}`, `TBD`)
+- Complete sentences (terminal punctuation)
+- Minimum evidence (≥2 bullet IDs, ≥1 experience ID)
+- No banned phrases — two-tier system:
+  - **Core banned phrases** (31 entries): always rejected regardless of profile. Covers AI-tell filler ("proven track record", "I am passionate about", etc.)
+  - **Profile banned phrases** (`CoverLetterPreferences.banned_phrases`): candidate-specific voice constraints, also hard failures
+- No generic openers ("I am writing to express my interest", etc.)
+- Company motivation substance (≥10 words of specific reasoning)
+- Prose grounding: for each `requirement_evidence` entry, at least one substantive token (numbers, 5+ char non-stopwords) from the cited bullets must appear in the body text
+
+**Soft checks (warnings, logged but not blocking):**
+- Paragraph duplicate claims (Jaccard similarity > 0.65)
+- Company name missing from `company_motivation` or body
+- Word budget (280–420 words)
+- AI-tell word density (≥3 of: delve, tapestry, synergy, paradigm, etc.)
+- Company motivation substance not reflected in body text
+
+### Tone version
+
+`tone_version` is a `Literal["confident_direct", "professional_narrative", "technical_precise"]`. The prompt explains each option; the LLM must choose one. This replaces the previous unconstrained string field.
+
+### Quality mechanisms
+
+Quality is enforced through layered defenses:
+1. **Style guide** (`context/cover_letter_style.md`) — includes voice benchmark excerpts from real candidate letters
+2. **Prompt constraints** — 10 hard requirements including no generic openers, no repeated claims, specific phrases auto-rejected
+3. **Profile preferences** (`candidate_profile.yaml` → `cover_letter` section) — banned phrases, positioning angles, narrative themes, emphasis controls
+4. **Structural validation** — prose grounding, evidence mapping, company motivation substance
+5. **Positioning rules** — domain-specific one-liners from `utils.positioning_rules()` based on `domain_tags`
+
+### Cost optimizations
+
+| Feature | Config flag | Default | Effect |
+|---------|------------|---------|--------|
+| Cover letter model | `KP_COVER_LETTER_MODEL` | `""` (= default) | Override the cover letter model |
+| Cover letter max tokens | `KP_COVER_LETTER_MAX_TOKENS` | `2200` | Caps output length |
+| Cover letter input cap | `KP_COVER_LETTER_MAX_INPUT_CHARS` | `12000` | Safety cap on JD chars sent |
+| Style guide path | `KP_COVER_LETTER_STYLE_GUIDE_PATH` | `context/cover_letter_style.md` | External style guide with voice benchmarks |
+
+## Resume renderer format spec
+
+The resume renderer produces `.docx` files matching the Kokomoor resume template (Feb/Sep/Mar reference documents):
 - **Font**: Times New Roman 11.5pt throughout, ALL CAPS via `w:caps` flag on section headers and company/school names
 - **Layout**: US Letter, 0.5" top/bottom margins, 0.65" left/right margins, 10pt minimum line spacing
 - **Section order**: EDUCATION → EXPERIENCE → TECHNICAL SKILLS → ADDITIONAL INFORMATION
@@ -146,9 +213,9 @@ Run IDs default to `manual-url-<timestamp>-<urlhash>` and can be overridden via 
 Templates in `prompts/` use `{placeholder}` syntax:
 - `tailor_job_analysis.md` — `{job_title}`, `{company}`, `{job_description}`
 - `tailor_resume_plan.md` — `{job_analysis}`, `{candidate_profile_structured}`, `{positioning_rules}`
-- `tailor_cover_letter.md` — `{candidate_profile}`, `{job_title}`, `{company}`, `{job_description}`, `{output_schema}`
+- `tailor_cover_letter_plan.md` — `{job_title}`, `{company}`, `{job_description}`, `{job_analysis}`, `{candidate_inventory}`, `{style_guide}`, `{positioning_rules}`
 
-The cover letter prompt defines a **quality benchmark**: direct, concrete, no filler, 250-400 words. Maintain this standard.
+The cover letter prompt defines a **quality benchmark**: direct, concrete, no filler, 300–420 words, with 10 hard requirements including evidence grounding and banned-phrase rejection. Maintain this standard.
 
 ## Context folder (`pipelines/job_agent/context/`)
 
@@ -156,10 +223,11 @@ Reference materials for the Tailoring node. **Private files here are gitignored*
 
 | File(s) | Purpose |
 |---------|---------|
-| `candidate_profile.yaml` | Structured profile data fed to prompts. **Primary input** for tailoring. Local only. |
+| `candidate_profile.yaml` | Structured profile data fed to prompts. **Primary input** for tailoring. Includes `cover_letter` section for voice/banned phrases. Local only. |
 | `candidate_profile.example.yaml` | Committed template; safe to push. |
+| `cover_letter_style.md` | Cover letter style guide with voice benchmark excerpts from Anduril, Human Agency, and CFS reference letters. |
 | `Resume_Kokomoor_*.pdf/.docx` | Multiple resume versions for different positioning (defense-lead, tech-lead, startup-lead). Quality and voice benchmarks for generated resumes. |
-| `Anduril.docx`, `CoverLetter_*.docx` | Cover letter examples. The Anduril letter is the explicit quality target referenced in `prompts/tailor_cover_letter.md`. |
+| `Anduril.docx`, `CoverLetter_*.docx`, `Kokomoor_CoverLetter.docx` | Cover letter examples. Voice benchmarks excerpted in `cover_letter_style.md`. |
 | `Gauntlet-42_*.docx`, `Gauntlet - Dealum.pdf`, `Gauntlet_Pitch_Deck_*.pdf`, `Spyglass.pdf` | Startup/product depth. Use when tailoring for AI, startup, or PropTech roles — Spyglass is an "AI-native automated public-records researcher" with OCR/NLP/LLM extraction pipelines. |
 | `master_context.md` | Full candidate constitution — profile, job search params, architecture rationale, writing voice, milestone plan. |
 | `progress_log.md` | Rolling session state for LLM continuity across development sessions. |
@@ -186,3 +254,7 @@ pytest pipelines/job_agent/tests/ -v
 - Tailoring node expects `state.job_analyses` to be pre-populated by the upstream job-analysis node. If a listing has no matching analysis, it is skipped with an error — not crashed.
 - Setting `KP_JOB_ANALYSIS_MODEL` to empty string means the analysis falls back to the default `KP_ANTHROPIC_MODEL` (Sonnet), which is more expensive. Only do this if Haiku quality is insufficient for a specific use case.
 - `INDEED` is a supported `JobSource`. Provider detection, source mapping, and selectors all handle Indeed URLs.
+- Missing `cover_letter` section in `candidate_profile.yaml` — all cover-letter quality knobs (banned phrases, positioning angles, narrative themes, signoff preference) are inert without it. The example YAML shows the expected shape.
+- Using a free-text `tone_version` — it's a `Literal` type. Valid values: `confident_direct`, `professional_narrative`, `technical_precise`.
+- Writing generic body paragraphs that cite bullet IDs in metadata but don't include specific terms from those bullets — prose grounding validation will reject the letter.
+- Adding a core banned phrase to a cover letter test fixture — the validation now hard-rejects these. See `CORE_BANNED_PHRASES` in `cover_letter/validation.py`.

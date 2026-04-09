@@ -21,6 +21,7 @@ class PipelinePhase(StrEnum):
     FILTERING = "filtering"
     JOB_ANALYSIS = "job_analysis"
     TAILORING = "tailoring"
+    COVER_LETTER_TAILORING = "cover_letter_tailoring"
     HUMAN_REVIEW = "human_review"
     APPLICATION = "application"
     TRACKING = "tracking"

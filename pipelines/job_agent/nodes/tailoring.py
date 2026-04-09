@@ -33,6 +33,7 @@ from pipelines.job_agent.resume.applier import apply_tailoring_plan
 from pipelines.job_agent.resume.profile import format_profile_for_llm, load_master_profile
 from pipelines.job_agent.resume.renderer import render_resume_docx
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
+from pipelines.job_agent.utils import expand_domain_tags, positioning_rules, safe_filename
 
 if TYPE_CHECKING:
     from core.llm.protocol import LLMClient
@@ -41,24 +42,6 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
-_ALWAYS_RELEVANT_TAGS = {"leadership", "technical", "general", "management", "software"}
-
-_TAG_EXPANSION: dict[str, list[str]] = {
-    "military": ["defense", "naval"],
-    "government": ["defense"],
-    "aerospace": ["defense"],
-    "robotics": ["technical", "hardware", "software"],
-    "data": ["ml", "ai"],
-    "machine learning": ["ml", "ai"],
-    "fintech": ["finance"],
-    "trading": ["finance"],
-    "quant": ["finance", "math"],
-    "nuclear": ["energy"],
-    "clean": ["energy"],
-    "climate": ["energy"],
-    "product": ["startup"],
-    "growth": ["startup"],
-}
 
 _ENGINE: TailoringEngine[
     JobAgentState,
@@ -173,7 +156,7 @@ def _build_inventory_view(
     profile: ResumeMasterProfile,
     _runtime: _Runtime,
 ) -> str:
-    relevant_tags = _expand_domain_tags(analysis.domain_tags)
+    relevant_tags = expand_domain_tags(analysis.domain_tags)
     profile_text = format_profile_for_llm(profile, relevant_tags=relevant_tags)
     logger.debug(
         "tailoring.context_pruned",
@@ -195,7 +178,7 @@ def _build_prompt(
     prompt = runtime.plan_template.format(
         job_analysis=analysis.model_dump_json(indent=2),
         candidate_profile_structured=inventory_view,
-        positioning_rules=_positioning_rules(analysis.domain_tags),
+        positioning_rules=positioning_rules(analysis.domain_tags),
     )
     logger.debug("tailoring.prompt_built", dedup_key=listing.dedup_key)
     return prompt
@@ -234,8 +217,10 @@ def _apply_plan(
 
 
 def _get_output_path(state: JobAgentState, listing: JobListing, runtime: _Runtime) -> Path:
-    safe_name = _safe_filename(listing.company, listing.title, listing.dedup_key)
-    return runtime.output_dir / f"{safe_name}.docx"
+    return (
+        runtime.output_dir
+        / f"{safe_filename(listing.company, listing.title, listing.dedup_key)}.docx"
+    )
 
 
 def _render_document(
@@ -300,50 +285,6 @@ def _on_complete(state: JobAgentState, _runtime: _Runtime) -> None:
         tailored=tailored_count,
         errors=len(state.errors),
     )
-
-
-# ── helpers ────────────────────────────────────────────────────────────
-
-
-def _expand_domain_tags(domain_tags: list[str]) -> set[str]:
-    """Build the set of profile tags relevant to this job's domain."""
-    tags = {t.lower() for t in domain_tags}
-    expanded = set(tags)
-    for tag in tags:
-        expanded.update(_TAG_EXPANSION.get(tag, []))
-    expanded.update(_ALWAYS_RELEVANT_TAGS)
-    return expanded
-
-
-def _positioning_rules(domain_tags: list[str]) -> str:
-    """Select positioning guidance based on job domain tags."""
-    tags = {t.lower() for t in domain_tags}
-    rules: list[str] = []
-
-    if tags & {"defense", "military", "government", "aerospace"}:
-        rules.append("- For defense roles: lead with clearance, Lincoln Lab, Electric Boat.")
-    if tags & {"tech", "software", "engineering", "saas"}:
-        rules.append("- For tech roles: lead with technical depth, startup, MIT Sloan.")
-    if tags & {"energy", "nuclear", "clean", "climate"}:
-        rules.append("- For energy roles: lead with nuclear coursework, systems engineering.")
-    if tags & {"quant", "finance", "trading", "fintech"}:
-        rules.append("- For quant roles: lead with math, probability, FinTech ML.")
-    if tags & {"ai", "ml", "data", "machine learning"}:
-        rules.append("- For AI/ML roles: lead with GenAI Lab, Spyglass pipeline, ML coursework.")
-    if tags & {"startup", "product", "growth"}:
-        rules.append("- For startup/product roles: lead with Gauntlet-42, MIT Co-ops, MBA.")
-
-    if not rules:
-        rules.append("- Position the candidate's strongest and most relevant experience first.")
-
-    return "\n".join(rules)
-
-
-def _safe_filename(company: str, title: str, dedup_key: str) -> str:
-    """Build a filesystem-safe filename from listing fields."""
-    raw = f"{company}_{title}".replace(" ", "_")
-    safe = "".join(c for c in raw if c.isalnum() or c in ("_", "-"))
-    return f"{safe[:50]}_{dedup_key[:8]}"
 
 
 RESUME_TAILORING_SPEC = _build_spec()
