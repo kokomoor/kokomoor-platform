@@ -670,12 +670,14 @@ def _extract_company(
             text = node.get_text(" ", strip=True)
             if text:
                 return normalize_line(text)
-    generic_visible = _extract_generic_company_visible_text(soup)
-    if generic_visible:
-        return generic_visible
+    # Title patterns (e.g. "Role - Company", "Role at Company") are high-signal and
+    # should win before loose "nearby paragraph" heuristics that can match JD prose.
     title_company = _extract_company_from_title(title)
     if title_company:
         return title_company
+    generic_visible = _extract_generic_company_visible_text(soup)
+    if generic_visible:
+        return generic_visible
     site_name = _meta_content(soup, "og:site_name")
     if site_name:
         return normalize_line(site_name)
