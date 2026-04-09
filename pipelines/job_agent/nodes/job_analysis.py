@@ -64,9 +64,6 @@ def _build_spec() -> StructuredAnalysisSpec[JobAgentState, JobListing, JobAnalys
     )
 
 
-JOB_ANALYSIS_SPEC = _build_spec()
-
-
 async def job_analysis_node(
     state: JobAgentState,
     *,
@@ -189,3 +186,6 @@ def _on_complete(state: JobAgentState, _runtime: _Runtime) -> None:
         analysed=len(state.job_analyses),
         errors=len(state.errors),
     )
+
+
+JOB_ANALYSIS_SPEC = _build_spec()

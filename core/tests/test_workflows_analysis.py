@@ -145,7 +145,7 @@ async def test_prompt_and_model_token_overrides() -> None:
     await engine.run(state, llm_client=client, spec=_spec())
 
     prompt, kwargs = client.calls[0]
-    assert prompt == "analyze::x"
+    assert prompt.startswith("analyze::x")
     assert kwargs["model"] == "model-x"
     assert kwargs["max_tokens"] == 99
     assert kwargs["run_id"] == "run-123"

@@ -113,9 +113,6 @@ def _build_spec() -> TailoringSpec[
     )
 
 
-RESUME_TAILORING_SPEC = _build_spec()
-
-
 async def tailoring_node(
     state: JobAgentState,
     *,
@@ -347,3 +344,6 @@ def _safe_filename(company: str, title: str, dedup_key: str) -> str:
     raw = f"{company}_{title}".replace(" ", "_")
     safe = "".join(c for c in raw if c.isalnum() or c in ("_", "-"))
     return f"{safe[:50]}_{dedup_key[:8]}"
+
+
+RESUME_TAILORING_SPEC = _build_spec()

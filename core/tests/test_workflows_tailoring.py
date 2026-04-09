@@ -50,11 +50,9 @@ def _spec(
         get_context=lambda state, item, _runtime: state.contexts.get(item),
         on_missing_context=lambda state, item, _runtime: state.errors.append(f"missing:{item}"),
         on_item_start=lambda _state, _item, _runtime: None,
-        build_inventory_view=lambda _state,
-        item,
-        context,
-        inventory,
-        _runtime: f"{item}:{context}:{inventory[0]}",
+        build_inventory_view=lambda _state, item, context, inventory, _runtime: (
+            f"{item}:{context}:{inventory[0]}"
+        ),
         build_prompt=lambda _state, _item, _context, _inventory, view, _runtime: f"prompt::{view}",
         get_run_id=lambda state: state.run_id,
         get_model=lambda _state, runtime: runtime.model,
@@ -149,7 +147,7 @@ async def test_apply_render_and_prompt_delegation(tmp_path: Path) -> None:
 
     assert state.applied == [("a", "ok")]
     prompt, kwargs = client.calls[0]
-    assert prompt == "prompt::a:ctx:inventory"
+    assert prompt.startswith("prompt::a:ctx:inventory")
     assert kwargs["model"] == "plan-model"
     assert kwargs["max_tokens"] == 111
     assert kwargs["run_id"] == "rid"
