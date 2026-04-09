@@ -59,13 +59,12 @@ class StructuredAnalysisEngine(Generic[StateT, ItemT, ResponseT, RuntimeT]):
         llm_client: LLMClient,
         spec: StructuredAnalysisSpec[StateT, ItemT, ResponseT, RuntimeT],
     ) -> StateT:
-        runtime = spec.prepare(state)
-
         if spec.should_skip(state):
             logger.info("structured_analysis.skip", workflow=spec.name)
             spec.on_skip(state)
             return state
 
+        runtime = spec.prepare(state)
         items = spec.get_items(state)
         for item in items:
             cache_key = spec.get_cache_key(state, item, runtime)
@@ -78,8 +77,8 @@ class StructuredAnalysisEngine(Generic[StateT, ItemT, ResponseT, RuntimeT]):
                     spec.on_item_result(state, item, cached, runtime)
                     continue
 
-            spec.on_item_start(state, item, runtime)
             try:
+                spec.on_item_start(state, item, runtime)
                 prompt = spec.build_prompt(state, item, runtime)
                 result = await structured_complete(
                     llm_client,

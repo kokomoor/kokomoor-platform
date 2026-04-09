@@ -65,12 +65,12 @@ class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Docume
         llm_client: LLMClient,
         spec: TailoringSpec[StateT, ItemT, ContextT, InventoryT, PlanT, DocumentT, RuntimeT],
     ) -> StateT:
-        runtime = spec.prepare(state)
         if spec.should_skip(state):
             logger.info("tailoring.skip", workflow=spec.name)
             spec.on_skip(state)
             return state
 
+        runtime = spec.prepare(state)
         inventory = spec.load_inventory(state, runtime)
         for item in spec.get_items(state):
             context = spec.get_context(state, item, runtime)

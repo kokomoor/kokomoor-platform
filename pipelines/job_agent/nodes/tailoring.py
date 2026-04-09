@@ -213,10 +213,16 @@ def _validate_plan(
     _runtime: _Runtime,
 ) -> None:
     valid_bullet_ids = profile.all_bullet_ids()
+    unknown_ids: list[str] = []
     for op in plan.bullet_ops:
         if op.bullet_id not in valid_bullet_ids:
-            msg = f"Tailoring plan references unknown bullet id: {op.bullet_id}"
-            raise ValueError(msg)
+            unknown_ids.append(op.bullet_id)
+    if unknown_ids:
+        logger.warning(
+            "tailoring.plan_unknown_bullet_ops",
+            dedup_key=_listing.dedup_key,
+            unknown_bullet_ids=unknown_ids,
+        )
 
 
 def _apply_plan(

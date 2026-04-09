@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import BaseModel
 
 from core.testing import MockLLMClient
 from core.workflows.analysis import StructuredAnalysisEngine, StructuredAnalysisSpec
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class AnalysisOut(BaseModel):
@@ -32,11 +36,17 @@ class Runtime:
     max_tokens: int
 
 
-def _spec() -> StructuredAnalysisSpec[DummyState, str, AnalysisOut, Runtime]:
+def _spec(
+    *,
+    prepare: Callable[[DummyState], Runtime] | None = None,
+    on_item_start: Callable[[DummyState, str, Runtime], None] | None = None,
+) -> StructuredAnalysisSpec[DummyState, str, AnalysisOut, Runtime]:
+    item_start_hook = on_item_start or (lambda _state, _item, _runtime: None)
+    prepare_hook = prepare or (lambda _state: Runtime(model="model-x", max_tokens=99))
     return StructuredAnalysisSpec(
         name="dummy_analysis",
         response_model=AnalysisOut,
-        prepare=lambda _state: Runtime(model="model-x", max_tokens=99),
+        prepare=prepare_hook,
         get_items=lambda state: state.items,
         should_skip=lambda state: state.dry_run,
         on_skip=lambda state: setattr(state, "skipped", True),
@@ -47,7 +57,7 @@ def _spec() -> StructuredAnalysisSpec[DummyState, str, AnalysisOut, Runtime]:
         get_cache_key=lambda _state, item, _runtime: item,
         get_cached_result=lambda state, key, _runtime: state.cache.get(key),
         cache_result=lambda state, key, result, _runtime: state.cache.__setitem__(key, result),
-        on_item_start=lambda _state, _item, _runtime: None,
+        on_item_start=item_start_hook,
         on_item_result=lambda state, item, result, _runtime: state.results.__setitem__(
             item, result.value
         ),
@@ -70,6 +80,29 @@ async def test_skip_behavior() -> None:
 
 
 @pytest.mark.asyncio
+async def test_skip_does_not_prepare_runtime() -> None:
+    state = DummyState(items=["a"], dry_run=True)
+    prepare_calls = 0
+
+    engine: StructuredAnalysisEngine[DummyState, str, AnalysisOut, Runtime] = (
+        StructuredAnalysisEngine()
+    )
+
+    def _count_prepare() -> Runtime:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return Runtime(model="model-x", max_tokens=99)
+
+    await engine.run(
+        state,
+        llm_client=MockLLMClient(responses=[]),
+        spec=_spec(prepare=lambda _state: _count_prepare()),
+    )
+
+    assert prepare_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_and_cache_miss() -> None:
     cached = AnalysisOut(value="from-cache")
     state = DummyState(items=["hit", "miss"], cache={"hit": cached})
@@ -89,17 +122,11 @@ async def test_cache_hit_and_cache_miss() -> None:
 @pytest.mark.asyncio
 async def test_error_propagation() -> None:
     state = DummyState(items=["bad"])
-    spec = _spec()
-    spec = StructuredAnalysisSpec(
-        **{
-            **spec.__dict__,
-            "on_item_start": lambda _state, _item, _runtime: (_ for _ in ()).throw(
-                ValueError("boom")
-            ),
-        }
-    )
     engine: StructuredAnalysisEngine[DummyState, str, AnalysisOut, Runtime] = (
         StructuredAnalysisEngine()
+    )
+    spec = _spec(
+        on_item_start=lambda _state, _item, _runtime: (_ for _ in ()).throw(ValueError("boom"))
     )
 
     await engine.run(state, llm_client=MockLLMClient(responses=[]), spec=spec)

@@ -96,6 +96,32 @@ async def test_missing_context_and_skip_behavior(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_skip_does_not_prepare_runtime(tmp_path: Path) -> None:
+    prepare_calls = 0
+
+    def _count_prepare(_state: TailorState) -> Runtime:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return Runtime(out_dir=tmp_path, model="plan-model", max_tokens=111)
+
+    spec = _spec(tmp_path)
+    spec = TailoringSpec(
+        **{
+            **spec.__dict__,
+            "prepare": _count_prepare,
+        }
+    )
+
+    engine: TailoringEngine[TailorState, str, str, list[str], DummyPlan, str, Runtime] = (
+        TailoringEngine()
+    )
+    state = TailorState(items=["a"], dry_run=True)
+    await engine.run(state, llm_client=MockLLMClient(responses=[]), spec=spec)
+
+    assert prepare_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_per_item_isolation_and_output_writeback(tmp_path: Path) -> None:
     engine: TailoringEngine[TailorState, str, str, list[str], DummyPlan, str, Runtime] = (
         TailoringEngine()
