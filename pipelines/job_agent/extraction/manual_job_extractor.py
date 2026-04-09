@@ -300,7 +300,7 @@ def _extract_from_html(
         fallback=fallback_block,
     )
 
-    title = normalize_line(structured.title) or _extract_title(soup)
+    title = _resolve_job_title(structured.title, soup)
     company = normalize_line(structured.company) or _extract_company(
         soup,
         provider=provider,
@@ -631,6 +631,25 @@ def _clone_without_noise(soup: BeautifulSoup) -> BeautifulSoup:
     return cloned
 
 
+def _resolve_job_title(structured_title: str, soup: BeautifulSoup) -> str:
+    """Prefer visible page title when it extends structured metadata (e.g. JSON-LD short title).
+
+    Common case: JSON-LD ``title`` is only the role; ``h1`` includes ``Role - Company`` so
+    company extraction from the title string can run.
+    """
+    st = normalize_line(structured_title)
+    vt = normalize_line(_extract_title(soup))
+    if not vt:
+        return st
+    if not st:
+        return vt
+    if len(vt) > len(st) and vt.startswith(st):
+        next_ch = vt[len(st) : len(st) + 1]
+        if next_ch in {"", " ", "-", "|"} or next_ch in ("\u2014", "\u2013"):
+            return vt
+    return st
+
+
 def _extract_title(soup: BeautifulSoup) -> str:
     for selector in ("h1", "meta[property='og:title']", "title"):
         node = soup.select_one(selector)
@@ -744,6 +763,24 @@ def _looks_like_company_name(value: str) -> bool:
     if lowered in {"company", "employer", "careers"}:
         return False
     if any(token in lowered for token in ("apply", "job description", "responsibilities")):
+        return False
+    # Reject JD prose mistaken for a company (nearby <p> under body/header).
+    if any(
+        phrase in lowered
+        for phrase in (
+            "cross-functional",
+            "delivery",
+            "hiring plans",
+            "you will",
+            "this role",
+            "what you",
+        )
+    ):
+        return False
+    if re.match(
+        r"^(own|lead|drive|build|manage|deliver|define|develop|support|execute)\s",
+        lowered,
+    ):
         return False
     return len(value) <= 100
 
