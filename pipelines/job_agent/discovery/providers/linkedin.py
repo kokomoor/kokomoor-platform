@@ -475,12 +475,12 @@ class LinkedInProvider(BaseProvider):
         page_count = 1
 
         for _ in range(config.max_pages_per_search - 1):
+            # Delay BEFORE pagination interaction to avoid instant next request.
+            await rate_limiter.wait()
+            await behavior.between_pages_pause(self.source)
             advanced = await self._advance_page(page, behavior)
             if not advanced:
                 break
-
-            await rate_limiter.wait()
-            await behavior.between_pages_pause(self.source)
 
             captcha = await captcha_handler.detect(page)
             if captcha.detected:

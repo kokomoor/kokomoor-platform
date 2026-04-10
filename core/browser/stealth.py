@@ -116,6 +116,24 @@ ANTI_DETECTION_SCRIPT: str = """
     configurable: false,
   });
 
+  // 2b. Provide chrome.runtime surface expected by anti-bot checks
+  if (!window.chrome) {
+    Object.defineProperty(window, 'chrome', {
+      value: {},
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  }
+  if (!window.chrome.runtime) {
+    Object.defineProperty(window.chrome, 'runtime', {
+      value: {},
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  }
+
   // 3. WebGL vendor/renderer spoofing (both WebGL1 and WebGL2)
   const origGetParameter = WebGLRenderingContext.prototype.getParameter;
   WebGLRenderingContext.prototype.getParameter = function(param) {
@@ -132,20 +150,26 @@ ANTI_DETECTION_SCRIPT: str = """
     };
   }
 
-  // 4. Canvas fingerprint noise — deterministic per-context via timestamp seed
-  const seed = Date.now() % 256;
-  const dr = (seed % 3) + 1;
-  const dg = ((seed >> 2) % 3) + 1;
-  const db = ((seed >> 4) % 3) + 1;
+  // 4. Canvas fingerprint noise — low-amplitude random jitter per call
+  const randByte = () => {
+    try {
+      const arr = new Uint8Array(1);
+      self.crypto.getRandomValues(arr);
+      return arr[0];
+    } catch (e) {
+      return Math.floor(Math.random() * 256);
+    }
+  };
+  const channelNoise = () => (randByte() % 3) + 1;
   const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
   HTMLCanvasElement.prototype.toDataURL = function(...args) {
     try {
       const ctx = this.getContext('2d');
       if (ctx) {
         const pixel = ctx.getImageData(0, 0, 1, 1);
-        pixel.data[0] = (pixel.data[0] + dr) % 256;
-        pixel.data[1] = (pixel.data[1] + dg) % 256;
-        pixel.data[2] = (pixel.data[2] + db) % 256;
+        pixel.data[0] = (pixel.data[0] + channelNoise()) % 256;
+        pixel.data[1] = (pixel.data[1] + channelNoise()) % 256;
+        pixel.data[2] = (pixel.data[2] + channelNoise()) % 256;
         pixel.data[3] = 255;
         ctx.putImageData(pixel, 0, 0);
       }

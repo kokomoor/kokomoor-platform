@@ -239,9 +239,10 @@ class BuiltInProvider(BaseProvider):
             if not next_btn or not await next_btn.is_visible():
                 break
 
-            await behavior.human_click(page, next_btn)
+            # Delay BEFORE pagination interaction to avoid instant next request.
             await rate_limiter.wait()
             await behavior.between_pages_pause(self.source)
+            await behavior.human_click(page, next_btn)
 
             captcha = await captcha_handler.detect(page)
             if captcha.detected:

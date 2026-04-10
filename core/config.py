@@ -248,6 +248,14 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         description="LinkedIn account password. Never logged.",
     )
+    wellfound_email: str = Field(
+        default="",
+        description="Wellfound account email for job search login.",
+    )
+    wellfound_password: SecretStr = Field(
+        default=SecretStr(""),
+        description="Wellfound account password. Never logged.",
+    )
 
     # Target company lists for ATS providers (comma-separated slugs)
     greenhouse_target_companies: str = Field(

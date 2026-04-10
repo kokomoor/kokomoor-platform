@@ -47,19 +47,27 @@ async def deduplicate_refs(
 
     # Phase 2: database dedup
     if check_db and phase1:
-        from sqlmodel import col, select
+        try:
+            from sqlmodel import col, select
 
-        from core.database import get_session
-        from pipelines.job_agent.models import JobListing
+            from core.database import get_session
+            from pipelines.job_agent.models import JobListing
 
-        keys_to_check = [key for key, _ in phase1]
-        async with get_session() as session:
-            result = await session.execute(
-                select(JobListing.dedup_key).where(col(JobListing.dedup_key).in_(keys_to_check))
+            keys_to_check = [key for key, _ in phase1]
+            async with get_session() as session:
+                result = await session.execute(
+                    select(JobListing.dedup_key).where(col(JobListing.dedup_key).in_(keys_to_check))
+                )
+                existing_keys: set[str] = set(result.scalars().all())
+
+            phase1 = [(k, r) for k, r in phase1 if k not in existing_keys]
+        except Exception as exc:
+            logger.warning(
+                "dedup_db_unavailable",
+                check_db=check_db,
+                refs_considered=len(phase1),
+                error=str(exc)[:200],
             )
-            existing_keys: set[str] = set(result.scalars().all())
-
-        phase1 = [(k, r) for k, r in phase1 if k not in existing_keys]
 
     after_db = len(phase1)
     final = [ref for _, ref in phase1]

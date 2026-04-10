@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pipelines.job_agent.models import JobListing
 
 from pipelines.job_agent.discovery.deduplication import compute_dedup_key
+from pipelines.job_agent.discovery.url_utils import canonicalize_url
 
 # ---------------------------------------------------------------------------
 # Lightweight discovery data types (frozen dataclasses, not DB models)
@@ -119,17 +120,18 @@ def ref_to_job_listing(ref: ListingRef) -> JobListing:
     """Convert a lightweight ListingRef to a persistable JobListing."""
     from pipelines.job_agent.models import JobListing
 
+    canonical_url = canonicalize_url(ref.url)
     salary = parse_salary_text(ref.salary_text)
     return JobListing(
         title=ref.title,
         company=ref.company,
         location=ref.location,
-        url=ref.url,
+        url=canonical_url,
         source=ref.source,
         salary_min=salary.min_usd,
         salary_max=salary.max_usd,
         status=ApplicationStatus.DISCOVERED,
-        dedup_key=compute_dedup_key(ref.company, ref.title, ref.url),
+        dedup_key=compute_dedup_key(ref.company, ref.title, canonical_url),
     )
 
 

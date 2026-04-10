@@ -279,8 +279,10 @@ class WorkdayProvider(BaseProvider):
             if not load_more or not await load_more.is_visible():
                 break
 
-            await behavior.human_click(page, load_more)
+            # Delay BEFORE pagination interaction to avoid instant next request.
             await rate_limiter.wait()
+            await behavior.between_pages_pause(self.source)
+            await behavior.human_click(page, load_more)
             await asyncio.sleep(2.0)
             await behavior.simulate_interest_in_page(page)
 

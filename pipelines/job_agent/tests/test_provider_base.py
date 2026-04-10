@@ -130,6 +130,35 @@ class TestRunSingleSearch:
         )
         assert refs == []
 
+    @pytest.mark.asyncio
+    async def test_wait_happens_before_initial_navigation(self) -> None:
+        provider = _TestProvider()
+        page = AsyncMock()
+        events: list[str] = []
+
+        async def _wait() -> None:
+            events.append("wait")
+
+        async def _goto(*args: object, **kwargs: object) -> None:
+            events.append("goto")
+
+        page.goto = AsyncMock(side_effect=_goto)
+        page.query_selector = AsyncMock(return_value=None)
+
+        rate_limiter = _make_rate_limiter()
+        rate_limiter.wait = AsyncMock(side_effect=_wait)
+
+        await provider._run_single_search(
+            page,
+            "https://example.com/jobs",
+            _CONFIG,
+            behavior=_make_behavior(),
+            rate_limiter=rate_limiter,
+            captcha_handler=_make_captcha_handler(),
+        )
+
+        assert events.index("wait") < events.index("goto")
+
 
 class TestPagination:
     @pytest.mark.asyncio
@@ -214,6 +243,42 @@ class TestPagination:
             captcha_handler=_make_captcha_handler(),
         )
         assert len(refs) <= 2
+
+    @pytest.mark.asyncio
+    async def test_wait_happens_before_next_click(self) -> None:
+        config = DiscoveryConfig(
+            sessions_dir="/tmp/test",
+            max_pages_per_search=2,
+            max_listings_per_provider=100,
+        )
+        provider = _TestProvider()
+        page = _make_page(has_next=True)
+        events: list[str] = []
+
+        async def _wait() -> None:
+            events.append("wait")
+
+        async def _click(*args: object, **kwargs: object) -> None:
+            events.append("click")
+
+        rate_limiter = _make_rate_limiter()
+        rate_limiter.wait = AsyncMock(side_effect=_wait)
+        behavior = _make_behavior()
+        behavior.human_click = AsyncMock(side_effect=_click)
+
+        await provider._run_single_search(
+            page,
+            "https://example.com/jobs",
+            config,
+            behavior=behavior,
+            rate_limiter=rate_limiter,
+            captcha_handler=_make_captcha_handler(),
+        )
+
+        # First wait is for initial navigation; second wait precedes pagination click.
+        assert events.count("wait") >= 2
+        assert events.count("click") >= 1
+        assert events.index("wait", 1) < events.index("click")
 
 
 class TestRunSearch:

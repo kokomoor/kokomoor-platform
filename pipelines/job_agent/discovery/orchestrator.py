@@ -171,6 +171,26 @@ class DiscoveryOrchestrator:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _credentials_for_provider(
+        provider: BaseProvider,
+        settings: Settings,
+    ) -> tuple[str, str] | None:
+        """Return provider-specific credentials or None if unavailable.
+
+        Keeping credential resolution centralized prevents accidental cross-provider
+        credential reuse and makes adding auth providers a localized change.
+        """
+        if provider.source == JobSource.LINKEDIN:
+            email = settings.linkedin_email.strip()
+            password = settings.linkedin_password.get_secret_value()
+            return (email, password) if email and password else None
+        if provider.source == JobSource.WELLFOUND:
+            email = settings.wellfound_email.strip()
+            password = settings.wellfound_password.get_secret_value()
+            return (email, password) if email and password else None
+        return None
+
+    @staticmethod
     async def _run_browser_provider(
         provider: BaseProvider,
         criteria: SearchCriteria,
@@ -204,6 +224,9 @@ class DiscoveryOrchestrator:
 
                     try:
                         if provider.requires_auth():
+                            # Delay BEFORE first warm-up navigation to avoid
+                            # "fresh context + instant request" bot signal.
+                            await rate_limiter.wait()
                             try:
                                 await page.goto(
                                     f"https://{provider.base_domain()}",
@@ -223,10 +246,27 @@ class DiscoveryOrchestrator:
                                     "orchestrator.authenticating",
                                     source=source.value,
                                 )
+                                credentials = DiscoveryOrchestrator._credentials_for_provider(
+                                    provider,
+                                    settings,
+                                )
+                                if credentials is None:
+                                    logger.warning(
+                                        "orchestrator.auth_missing_credentials",
+                                        source=source.value,
+                                    )
+                                    return ProviderResult(
+                                        source=source,
+                                        refs=[],
+                                        errors=["auth_missing_credentials"],
+                                        pages_scraped=0,
+                                        session_saved=False,
+                                    )
+                                email, password = credentials
                                 success = await provider.authenticate(
                                     page,
-                                    email=settings.linkedin_email,
-                                    password=settings.linkedin_password.get_secret_value(),
+                                    email=email,
+                                    password=password,
                                     behavior=behavior,
                                 )
                                 if not success:

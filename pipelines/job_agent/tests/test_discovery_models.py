@@ -18,7 +18,7 @@ from pipelines.job_agent.models import ApplicationStatus, JobSource
 class TestRefToJobListing:
     def test_maps_all_fields(self) -> None:
         ref = ListingRef(
-            url="https://example.com/jobs/1",
+            url="https://example.com/jobs/1?utm_source=test&id=123#apply",
             title="Software Engineer",
             company="Acme Corp",
             source=JobSource.LINKEDIN,
@@ -30,7 +30,7 @@ class TestRefToJobListing:
         assert listing.title == "Software Engineer"
         assert listing.company == "Acme Corp"
         assert listing.location == "San Francisco, CA"
-        assert listing.url == "https://example.com/jobs/1"
+        assert listing.url == "https://example.com/jobs/1?id=123"
         assert listing.source == JobSource.LINKEDIN
         assert listing.status == ApplicationStatus.DISCOVERED
         assert listing.salary_min == 180_000

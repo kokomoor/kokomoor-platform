@@ -87,3 +87,18 @@ class TestDbDedup:
             result = await deduplicate_refs([ref], in_run_seen=set(), check_db=True)
 
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_db_failure_falls_back_to_in_run_only(self) -> None:
+        refs = [_ref(url="https://example.com/1"), _ref(url="https://example.com/1")]
+        seen: set[str] = set()
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(side_effect=RuntimeError("db unavailable"))
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("core.database.get_session", return_value=mock_session):
+            result = await deduplicate_refs(refs, in_run_seen=seen, check_db=True)
+
+        # In-run dedup still applies; DB failure should not crash or drop all data.
+        assert len(result) == 1
