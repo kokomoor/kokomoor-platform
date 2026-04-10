@@ -70,9 +70,7 @@ class BrowserActions:
     # Element resolution
     # ------------------------------------------------------------------
 
-    async def _resolve(
-        self, selector: str, *, index: int = 0
-    ) -> ElementHandle | None:
+    async def _resolve(self, selector: str, *, index: int = 0) -> ElementHandle | None:
         """Find an element via CSS, then text, then aria-label fallback."""
         try:
             elements = await self._page.query_selector_all(selector)
@@ -105,7 +103,9 @@ class BrowserActions:
         self,
         url: str,
         *,
-        wait_until: Literal["commit", "domcontentloaded", "load", "networkidle"] = "domcontentloaded",
+        wait_until: Literal[
+            "commit", "domcontentloaded", "load", "networkidle"
+        ] = "domcontentloaded",
         timeout_ms: int = 30_000,
     ) -> NavigationResult:
         """Navigate to *url* with a human pause afterward."""
@@ -153,7 +153,9 @@ class BrowserActions:
         """Click an element with natural mouse movement."""
         el = await self._resolve(selector, index=index)
         if el is None:
-            return ActionResult(success=False, error=f"Element not found: {selector}", selector_found=False)
+            return ActionResult(
+                success=False, error=f"Element not found: {selector}", selector_found=False
+            )
         try:
             await self._behavior.human_click(self._page, el)
             await self._behavior.between_actions_pause()
@@ -165,7 +167,9 @@ class BrowserActions:
         """Clear a field and type *text* with realistic cadence."""
         el = await self._resolve(selector)
         if el is None:
-            return ActionResult(success=False, error=f"Element not found: {selector}", selector_found=False)
+            return ActionResult(
+                success=False, error=f"Element not found: {selector}", selector_found=False
+            )
         try:
             await self._behavior.human_click(self._page, el)
             await el.evaluate("el => el.value = ''")
@@ -179,7 +183,9 @@ class BrowserActions:
         """Append *text* to a field without clearing (trigger typing handlers)."""
         el = await self._resolve(selector)
         if el is None:
-            return ActionResult(success=False, error=f"Element not found: {selector}", selector_found=False)
+            return ActionResult(
+                success=False, error=f"Element not found: {selector}", selector_found=False
+            )
         try:
             await self._behavior.human_click(self._page, el)
             await self._behavior.type_with_cadence(el, text)
@@ -192,7 +198,9 @@ class BrowserActions:
         """Select a ``<select>`` option by value or visible text."""
         el = await self._resolve(selector)
         if el is None:
-            return ActionResult(success=False, error=f"Element not found: {selector}", selector_found=False)
+            return ActionResult(
+                success=False, error=f"Element not found: {selector}", selector_found=False
+            )
         try:
             await self._behavior.human_click(self._page, el)
             await self._page.select_option(selector, value=value, timeout=3_000)
@@ -210,7 +218,9 @@ class BrowserActions:
         """Check a checkbox or radio button."""
         el = await self._resolve(selector)
         if el is None:
-            return ActionResult(success=False, error=f"Element not found: {selector}", selector_found=False)
+            return ActionResult(
+                success=False, error=f"Element not found: {selector}", selector_found=False
+            )
         try:
             is_checked: bool = await el.is_checked()
             if not is_checked:
@@ -224,7 +234,9 @@ class BrowserActions:
         """Upload a file via a file-input element."""
         el = await self._resolve(selector)
         if el is None:
-            return ActionResult(success=False, error=f"Element not found: {selector}", selector_found=False)
+            return ActionResult(
+                success=False, error=f"Element not found: {selector}", selector_found=False
+            )
         try:
             await el.set_input_files(path)
             await self._behavior.between_actions_pause()
@@ -235,11 +247,16 @@ class BrowserActions:
     async def scroll(self, direction: str = "down", amount: int = 500) -> ActionResult:
         """Scroll the page with human-like variance."""
         try:
-            jitter = random.randint(-80, 80)
-            pixels = max(100, amount + jitter)
+            jitter = random.randint(-120, 120)
+            pixels = max(120, amount + jitter)
             sign = -1 if direction == "up" else 1
-            await self._page.evaluate(f"window.scrollBy(0, {sign * pixels})")
-            await self._behavior.between_actions_pause(min_s=0.2, max_s=0.6)
+            remaining = pixels
+            while remaining > 0:
+                step = min(remaining, random.randint(140, 420))
+                await self._page.evaluate("([delta]) => window.scrollBy(0, delta)", [sign * step])
+                remaining -= step
+                await self._behavior.between_actions_pause(min_s=0.08, max_s=0.25)
+            await self._behavior.between_actions_pause(min_s=0.2, max_s=0.7)
             return ActionResult(success=True)
         except Exception as exc:
             return ActionResult(success=False, error=str(exc)[:300])

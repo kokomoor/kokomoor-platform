@@ -64,6 +64,18 @@
 | **Prefilter** | Rule-based scoring of `ListingRef` metadata (title, location, salary) against `SearchCriteria`. Returns 0.0–1.0 score; listings below `prefilter_min_score` are dropped before `ref_to_job_listing()` conversion. No LLM involved. |
 | **CaptchaHandler** | Detection and tiered response for CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile/JS challenge). Three strategies: `avoid`, `pause_notify`, `solve`. |
 
+## Scraper pipeline concepts
+
+| Term | Definition |
+|------|-----------|
+| **SiteProfile** | Declarative configuration describing how to authenticate, navigate, and extract data from a target site. |
+| **OutputContract** | Field-level schema and SLO expectations for scraper output, including dedup key composition. |
+| **BaseSiteWrapper** | Generic profile-driven wrapper that handles auth, pagination, extraction, dedup, and drift checks. |
+| **FixtureStore** | Captures and loads HTML/screenshot snapshots used for offline testing and drift baselines. |
+| **StructuralFingerprint** | Token-efficient summary of DOM structure for drift detection between historical and live pages. |
+| **RemediationReport** | Structured diagnosis output from heal flow, including root cause, affected files, and ordered remediation steps. |
+| **HealToken** | Signed token included in diagnosis emails; required to authenticate IMAP \"fix\" replies. |
+
 ## Infrastructure
 
 | Term | Definition |

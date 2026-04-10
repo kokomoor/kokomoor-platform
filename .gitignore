@@ -33,6 +33,11 @@ output/
 data/tailored_resumes/
 data/sessions/*
 !data/sessions/.gitkeep
+data/scraper_content/
+data/scraper_cookies/
+data/heal_reports/
+pipelines/scraper/fixtures/*
+!pipelines/scraper/fixtures/.gitkeep
 
 # Docker
 .docker/

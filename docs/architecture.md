@@ -6,7 +6,8 @@
 kokomoor-platform/
 ├── core/               Shared library (config, db, llm, browser, observability, notifications)
 ├── pipelines/          Self-contained automation pipelines
-│   └── job_agent/      Pipeline 1: job search automation
+│   ├── job_agent/      Pipeline 1: job search automation
+│   └── scraper/        Pipeline 2: universal profile-driven web scraper
 ├── alembic/            Database migrations (shared across all pipelines)
 ├── docs/               Architecture docs, decisions, glossary
 ├── scripts/            One-off setup scripts
@@ -21,8 +22,10 @@ kokomoor-platform/
 | `core/` | Shared infrastructure library | Never add pipeline-specific logic. All pipelines import from here. |
 | `core/llm/` | LLM abstraction layer | Pipeline code depends on `LLMClient` protocol only. Provider imports (`anthropic`, etc.) stay inside implementation files. |
 | `core/browser/` | Managed Playwright with stealth | All browser interactions go through `BrowserManager`. Never use raw Playwright. |
+| `core/scraper/` | Shared scraper infrastructure | Dedup engine, content store, HTTP client, fixture management. Domain-agnostic. |
+| `core/web_agent/` | LLM-driven web agent | Observe-decide-act loop for autonomous browser navigation. |
 | `core/models/` | Shared base models | Only generic bases (`TimestampMixin`, `BaseModel`, `PipelineRun`). Pipeline-specific models belong in the pipeline. |
-| `pipelines/<name>/` | Self-contained pipeline | Own models, nodes, state, tests, Dockerfile, prompts. Imports from `core/` only. |
+| `pipelines/<name>/` | Self-contained pipeline | Own models, nodes, state, tests, prompts. Imports from `core/` only. |
 
 ## Data flow
 
@@ -33,8 +36,10 @@ Database (core/database.py)         → AsyncEngine + async_sessionmaker → SQL
 LLM (core/llm/)                     → LLMClient protocol → AnthropicClient (or future providers)
 Browser (core/browser/)             → BrowserManager → Playwright + stealth + rate limiting
 Fetch (core/fetch/)                 → HttpFetcher + BrowserFetcher → shared HTML transport
+Scraper (core/scraper/)             → DedupEngine + ContentStore + StealthHttpClient + FixtureStore
+Web Agent (core/web_agent/)         → WebAgentController → LLM-driven observe-decide-act loop
 Observability (core/observability/) → structlog (JSON/console) + Prometheus metrics
-Notifications (core/notifications/) → Async SMTP
+Notifications (core/notifications/) → Async SMTP + IMAP reply watcher (heal triggers)
 ```
 
 ## LLM abstraction

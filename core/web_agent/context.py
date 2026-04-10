@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_SENSITIVE_ACTIONS = {"fill", "type_text", "upload"}
+
 
 def _summarize_step(step: AgentStep) -> str:
     """Compress one step into a single line for history."""
@@ -30,7 +32,7 @@ def _summarize_step(step: AgentStep) -> str:
     ok = "ok" if step.result.success else "FAILED"
 
     if verb in ("fill", "type_text"):
-        val = (action.value or "")[:40]
+        val = "<redacted>"
         return f"Step {step.step_number}: {verb} [{action.element_index}] '{val}' → {ok}"
     if verb in ("click", "check", "select"):
         val = f" '{action.value}'" if action.value else ""
@@ -123,7 +125,7 @@ class AgentContextManager:
         if older:
             summaries = [_summarize_step(s) for s in older]
             if len(summaries) > self._max_summary_lines:
-                kept = summaries[-(self._max_summary_lines):]
+                kept = summaries[-(self._max_summary_lines) :]
                 lines.append(f"(… {len(summaries) - len(kept)} earlier steps omitted …)")
                 summaries = kept
             lines.extend(summaries)
@@ -133,10 +135,11 @@ class AgentContextManager:
                 lines.append("--- recent (verbatim) ---")
             for step in recent:
                 lines.append(
+                    # Keep recent context while redacting sensitive action payloads.
                     f"Step {step.step_number} @ {step.page_url}\n"
                     f"  Action: {step.action_taken.action} "
                     f"element=[{step.action_taken.element_index}] "
-                    f"value='{step.action_taken.value or ''}'\n"
+                    f"value='{'<redacted>' if step.action_taken.action in _SENSITIVE_ACTIONS else step.action_taken.value or ''}'\n"
                     f"  Reasoning: {step.action_taken.reasoning}\n"
                     f"  Result: {'success' if step.result.success else 'FAILED: ' + step.result.error}\n"
                     f"  Page summary: {step.page_state_summary}"

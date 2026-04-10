@@ -1,0 +1,71 @@
+# Vision Government Solutions — Woonsocket, RI
+# Public property assessment portal
+# URL: https://gis.vgsi.com/WoonsocketRI/Search.aspx
+
+site_id: vision_gsi_woonsocketri
+display_name: "VGSI - Woonsocket, RI"
+base_url: "https://gis.vgsi.com/WoonsocketRI"
+
+auth:
+  type: none
+
+rate_limit:
+  min_delay_s: 5.0
+  max_delay_s: 12.0
+  pages_before_long_pause: 5
+  long_pause_min_s: 45.0
+  long_pause_max_s: 120.0
+
+requires_browser: true
+
+navigation:
+  search_url_template: "https://gis.vgsi.com/WoonsocketRI/Search.aspx"
+  pagination: aspnet_postback
+  results_container_selector: "table.GridStyle, #MainContent_grdSearchResults"
+  no_results_indicator: "No records found"
+
+selectors:
+  result_item: "table.GridStyle tr, #MainContent_grdSearchResults tr"
+  field_map:
+    owner: "owner"
+    address: "location"
+    mblu: "mblu"
+    assessment: "total_value"
+    detail_url: "detail_url"
+  detail_link: "a[href*='Parcel.aspx']"
+
+output_contract:
+  fields:
+    - name: owner
+      type: str
+      required: true
+      description: "Property owner name"
+    - name: address
+      type: str
+      required: true
+      description: "Property street address"
+    - name: mblu
+      type: str
+      required: false
+      description: "Map-Block-Lot-Unit identifier"
+    - name: assessment
+      type: str
+      required: false
+      description: "Total assessed value"
+    - name: detail_url
+      type: url
+      required: false
+      description: "Link to full property detail page"
+  dedup_fields:
+    - owner
+    - address
+  min_records_per_search: 5
+  max_empty_pages_before_stop: 2
+
+fixture_refresh_days: 14
+drift_threshold: 0.80
+max_pages_per_search: 30
+notes: >
+  ASP.NET Web Forms portal. Pagination via __doPostBack. Public records,
+  no authentication. Conservative rate limits — government infrastructure.
+  Last database update: check portal footer.

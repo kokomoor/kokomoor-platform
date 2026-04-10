@@ -30,9 +30,7 @@ class FormFieldAnswer(BaseModel):
         le=1.0,
         description="Self-assessed confidence that this is the correct answer.",
     )
-    source: str = Field(
-        description="Which section of the candidate profile this answer came from."
-    )
+    source: str = Field(description="Which section of the candidate profile this answer came from.")
 
 
 _QA_SYSTEM = (

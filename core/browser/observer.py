@@ -34,9 +34,7 @@ _TAG_TO_ROLE: dict[str, str] = {
     "radio": "radio",
 }
 
-_PROGRESS_RE = re.compile(
-    r"(?:step|page|question)\s*(\d+)\s*(?:of|/)\s*(\d+)", re.IGNORECASE
-)
+_PROGRESS_RE = re.compile(r"(?:step|page|question)\s*(\d+)\s*(?:of|/)\s*(\d+)", re.IGNORECASE)
 
 _ERROR_SELECTORS = [
     ".error, .error-message, .field-error, .form-error",
@@ -177,9 +175,7 @@ class PageObserver:
             title = ""
 
         forms = await self._extract_forms(page, max_elements=max_elements)
-        form_indices = {
-            el.index for form in forms for el in form.fields
-        }
+        form_indices = {el.index for form in forms for el in form.fields}
 
         interactive = await self._extract_interactive(
             page, max_elements=max_elements, exclude_indices=form_indices
@@ -215,9 +211,7 @@ class PageObserver:
     # Internal extraction helpers
     # ------------------------------------------------------------------
 
-    async def _extract_forms(
-        self, page: Page, *, max_elements: int
-    ) -> list[FormInfo]:
+    async def _extract_forms(self, page: Page, *, max_elements: int) -> list[FormInfo]:
         forms: list[FormInfo] = []
         try:
             form_handles = await page.query_selector_all("form")
@@ -269,8 +263,7 @@ class PageObserver:
         elements: list[ElementInfo] = []
         try:
             handles = await page.query_selector_all(
-                "a[href], button, [role='button'], [role='tab'], "
-                "[role='link'], [onclick]"
+                "a[href], button, [role='button'], [role='tab'], [role='link'], [onclick]"
             )
         except Exception:
             return elements
@@ -283,9 +276,7 @@ class PageObserver:
                 elements.append(info)
         return elements
 
-    async def _element_to_info(
-        self, el: ElementHandle, page: Page
-    ) -> ElementInfo | None:
+    async def _element_to_info(self, el: ElementHandle, page: Page) -> ElementInfo | None:
         try:
             props: dict[str, Any] = await page.evaluate(
                 """(el) => {

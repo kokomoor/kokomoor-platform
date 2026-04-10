@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_SENSITIVE_ACTIONS = {"fill", "type_text", "upload"}
+
 
 class WebAgentController:
     """LLM-driven web navigation via observe → decide → act loop."""
@@ -97,7 +99,9 @@ class WebAgentController:
                 step=step_num,
                 action=action.action,
                 element=action.element_index,
-                value=(action.value or "")[:60],
+                value="<redacted>"
+                if action.action in _SENSITIVE_ACTIONS
+                else (action.value or "")[:60],
                 confidence=action.confidence,
             )
 
@@ -215,6 +219,7 @@ class WebAgentController:
                     ok = await self._actions.wait_for(action.value, timeout_ms=5_000)
                     return ActionResult(success=ok, error="" if ok else "Wait timed out")
                 import asyncio
+
                 await asyncio.sleep(2)
                 return ActionResult(success=True)
             if action.action == "press_key":

@@ -12,8 +12,10 @@ Shared infrastructure library. All pipelines import from this package. Changes h
 | `llm/` | LLM abstraction layer | See `core/llm/AGENTS.md` |
 | `browser/` | Playwright lifecycle + stealth | `BrowserManager`, `stealth.py` |
 | `fetch/` | Shared HTTP/browser HTML fetch + JSON-LD script parsing | `HttpFetcher`, `BrowserFetcher`, `ContentFetcher`, `jsonld.py` |
+| `scraper/` | Shared scraper storage + drift infra | `DedupEngine`, `ContentStore`, `FixtureStore`, `StealthHttpClient` |
+| `web_agent/` | LLM-driven observe/decide/act controller | `WebAgentController`, protocol/context modules |
 | `observability/` | Logging + metrics | `setup_logging()`, Prometheus counters |
-| `notifications/` | Async SMTP | `send_notification()` |
+| `notifications/` | Async SMTP + IMAP reply watcher | `send_notification()`, `InboxWatcher` |
 | `testing/` | Test fixtures | `MockLLMClient`, `get_test_session()` |
 
 ## Rules

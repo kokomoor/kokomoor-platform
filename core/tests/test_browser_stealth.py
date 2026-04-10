@@ -6,9 +6,9 @@ from core.browser.stealth import ANTI_DETECTION_SCRIPT
 
 
 class TestAntiDetectionScript:
-    def test_hides_webdriver_as_undefined(self) -> None:
+    def test_hides_webdriver_as_false(self) -> None:
         assert "navigator, 'webdriver'" in ANTI_DETECTION_SCRIPT
-        assert "get: () => undefined" in ANTI_DETECTION_SCRIPT
+        assert "get: () => false" in ANTI_DETECTION_SCRIPT
 
     def test_spoofs_plugins(self) -> None:
         assert "navigator, 'plugins'" in ANTI_DETECTION_SCRIPT
@@ -27,3 +27,12 @@ class TestAntiDetectionScript:
     def test_spoofs_chrome_runtime_surface(self) -> None:
         assert "window.chrome" in ANTI_DETECTION_SCRIPT
         assert "chrome.runtime" in ANTI_DETECTION_SCRIPT
+        assert "connect:" in ANTI_DETECTION_SCRIPT
+        assert "sendMessage:" in ANTI_DETECTION_SCRIPT
+
+    def test_webgl_spoofing_is_platform_aware(self) -> None:
+        assert "navigator.userAgent" in ANTI_DETECTION_SCRIPT
+        assert "/Windows/" in ANTI_DETECTION_SCRIPT
+        assert "/Linux/" in ANTI_DETECTION_SCRIPT
+        assert "Mesa" in ANTI_DETECTION_SCRIPT
+        assert "ANGLE" in ANTI_DETECTION_SCRIPT

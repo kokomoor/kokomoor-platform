@@ -1,7 +1,8 @@
-"""Async email notifications via SMTP.
+"""Async notification helpers (SMTP + optional IMAP watcher).
 
 Provides a simple interface for sending notification emails (human review
-digests, error alerts, etc.) from any pipeline.
+digests, error alerts, etc.) from any pipeline. IMAP reply watching is
+implemented in ``core.notifications.inbox``.
 
 Usage:
     from core.notifications import send_notification
@@ -21,6 +22,7 @@ import aiosmtplib
 import structlog
 
 from core.config import get_settings
+from core.notifications.inbox import InboxWatcher as InboxWatcher
 
 logger = structlog.get_logger(__name__)
 

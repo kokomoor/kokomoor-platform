@@ -61,10 +61,10 @@ kokomoor-platform/
 │   ├── browser/             Playwright lifecycle: stealth, rate limiting, fingerprinting
 │   ├── fetch/               Shared HTML transport: HttpFetcher, BrowserFetcher, JSON-LD parsing
 │   ├── observability/       structlog + Prometheus metrics
-│   └── notifications/       Async SMTP email
+│   └── notifications/       Async SMTP email + IMAP heal reply watcher
 │
 ├── pipelines/
-│   └── job_agent/           Pipeline 1: Job Application Agent
+│   ├── job_agent/           Pipeline 1: Job Application Agent
 │       ├── graph.py         LangGraph state machine (full + manual flows)
 │       ├── state.py         Typed pipeline state
 │       ├── models/          JobListing (SQLModel), SearchCriteria, resume tailoring models
@@ -75,6 +75,11 @@ kokomoor-platform/
 │       ├── cover_letter/    Cover letter generation, validation, .docx rendering
 │       ├── prompts/         Version-controlled LLM prompt templates
 │       └── tests/           Node-level tests with mocked LLM, no API calls
+│   └── scraper/             Pipeline 2: Universal Scraper
+│       ├── nodes/           scrape, validate, onboard, heal
+│       ├── wrappers/        Base wrapper + site-specific adapters
+│       ├── profiles/        SiteProfile YAML configs
+│       └── tests/           Offline fixture + contract + scale tests
 │
 ├── scripts/                 Manual pipeline entry points
 ├── alembic/                 Database migrations (shared)
@@ -204,6 +209,25 @@ The platform is designed for multiple pipelines sharing `core/`:
 - **Portfolio Manager** — GitHub profile and repo maintenance
 
 Each follows the same pattern: folder under `pipelines/`, imports from `core/`, own tests and Dockerfile.
+
+## Universal scraper quick run
+
+Run a live smoke test for any configured scraper site profile:
+
+```bash
+python -m pipelines.scraper.smoke_test --site-id indeed --query "software engineer" --location "Boston, MA"
+```
+
+Key scraper settings:
+- `KP_SCRAPER_PROFILES_DIR`
+- `KP_SCRAPER_FIXTURES_DIR`
+- `KP_SCRAPER_CONTENT_DIR`
+- `KP_SCRAPER_DEDUP_DB_PATH`
+
+Heal reply watcher settings:
+- `KP_IMAP_HOST`, `KP_IMAP_USERNAME`, `KP_IMAP_PASSWORD`
+- `KP_HEAL_TRIGGER_SIGNING_SECRET`
+- `KP_HEAL_TRIGGER_TOKEN_TTL_S`
 
 ## License
 

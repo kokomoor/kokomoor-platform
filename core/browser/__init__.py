@@ -89,11 +89,20 @@ class BrowserManager:
     ) -> None:
         """Close browser and playwright resources."""
         if self._context:
-            await self._context.close()
+            try:
+                await self._context.close()
+            except Exception:
+                logger.exception("browser_context_close_failed")
         if self._browser:
-            await self._browser.close()
+            try:
+                await self._browser.close()
+            except Exception:
+                logger.exception("browser_close_failed")
         if self._playwright:
-            await self._playwright.stop()
+            try:
+                await self._playwright.stop()
+            except Exception:
+                logger.exception("playwright_stop_failed")
         logger.info("browser_stopped")
 
     async def new_page(self) -> Page:

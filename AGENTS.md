@@ -1,6 +1,6 @@
 # AGENTS.md — Kokomoor Platform
 
-Personal agentic pipeline platform. Shared infrastructure (`core/`) powers self-contained automation pipelines (`pipelines/`). The first pipeline automates job search.
+Personal agentic pipeline platform. Shared infrastructure (`core/`) powers self-contained automation pipelines (`pipelines/`). Current pipelines: job search automation and universal web scraping.
 
 ## Read first
 
@@ -17,6 +17,9 @@ pipelines/      Self-contained pipelines (each has own models, nodes, tests, Doc
   job_agent/    Pipeline 1: job search automation
     discovery/  Browser + HTTP providers, session persistence, rate limiting, dedup, prefilter
     nodes/      Pipeline nodes: discovery, bulk_extraction, filtering, job_analysis, tailoring, ...
+  scraper/      Pipeline 2: universal profile-driven web scraper
+    wrappers/   Site-specific wrappers on top of BaseSiteWrapper
+    nodes/      scrape, validate, onboard, heal
 alembic/        Database migrations (shared)
 data/sessions/  Browser session storage (gitignored)
 docs/           Architecture docs, decisions, glossary
@@ -61,5 +64,8 @@ These directories have their own `AGENTS.md` with local rules:
 - `core/AGENTS.md` — shared infrastructure rules
 - `core/browser/AGENTS.md` — browser stealth stack, session persistence, `BrowserManager` rules
 - `core/llm/AGENTS.md` — LLM abstraction and provider implementation
+- `core/scraper/AGENTS.md` — shared scraper primitives (dedup, fixtures, content store, HTTP client)
+- `core/web_agent/AGENTS.md` — LLM-driven web agent loop
 - `pipelines/job_agent/AGENTS.md` — job pipeline domain, nodes, and constraints
 - `pipelines/job_agent/discovery/AGENTS.md` — discovery subsystem contract, provider checklist
+- `pipelines/scraper/AGENTS.md` — universal scraper pipeline contract

@@ -316,6 +316,72 @@ class Settings(BaseSettings):
         default=False, description="Requires target company list."
     )
 
+    # --- Scraper Pipeline ---
+    scraper_dedup_db_path: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "scraper_dedup.db"),
+        description="SQLite database for scraper deduplication.",
+    )
+    scraper_dedup_ttl_days: int = Field(
+        default=90, ge=1, description="Days before pruning old dedup keys."
+    )
+    scraper_content_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "scraper_content"),
+        description="Base directory for JSONL content store.",
+    )
+    scraper_fixtures_dir: str = Field(
+        default=str(_PROJECT_ROOT / "pipelines" / "scraper" / "fixtures"),
+        description="Base directory for site fixture snapshots.",
+    )
+    scraper_profiles_dir: str = Field(
+        default=str(_PROJECT_ROOT / "pipelines" / "scraper" / "profiles"),
+        description="Base directory for site profile YAML files.",
+    )
+
+    # --- Self-Healing ---
+    heal_reports_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "heal_reports"),
+        description="Directory for heal diagnosis reports.",
+    )
+    heal_max_tokens: int = Field(
+        default=500_000, ge=10_000, description="Token budget for heal remediation."
+    )
+    heal_max_retries_per_step: int = Field(
+        default=3, ge=1, le=10, description="Max retries per remediation step."
+    )
+    heal_max_wall_clock_minutes: int = Field(
+        default=30, ge=5, description="Wall-clock cap for heal remediation."
+    )
+    heal_diagnosis_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Model for heal diagnosis pass.",
+    )
+    heal_remediation_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Model for heal remediation agent.",
+    )
+
+    # --- IMAP (heal reply watching) ---
+    imap_host: str = Field(default="", description="IMAP server for heal reply watching.")
+    imap_port: int = Field(default=993, description="IMAP port (993 for SSL).")
+    imap_username: str = Field(default="", description="IMAP username.")
+    imap_password: SecretStr = Field(default=SecretStr(""), description="IMAP password.")
+    heal_reply_poll_interval_s: int = Field(
+        default=300, ge=30, description="Seconds between inbox polls for heal replies."
+    )
+    heal_trigger_signing_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="HMAC secret used to sign and verify heal reply trigger tokens.",
+    )
+    heal_trigger_token_ttl_s: int = Field(
+        default=86_400,
+        ge=60,
+        description="Maximum age (seconds) for a heal reply trigger token.",
+    )
+    heal_reply_allowed_senders: str = Field(
+        default="",
+        description="Comma-separated allowed sender email addresses for heal replies.",
+    )
+
     # --- Feature Flags ---
     enable_browser_stealth: bool = Field(
         default=True,
