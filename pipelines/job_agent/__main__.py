@@ -45,7 +45,7 @@ async def main() -> None:
         ],
         target_roles=["TPM", "Senior Engineer", "Engineering Manager"],
         salary_floor=170_000,
-        sources=[JobSource.WELLFOUND, JobSource.BUILTIN],
+        sources=[JobSource.WELLFOUND, JobSource.BUILTIN, JobSource.LINKEDIN],
     )
 
     initial_state = JobAgentState(

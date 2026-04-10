@@ -209,6 +209,18 @@ class Settings(BaseSettings):
         description="Enable optional critique pass for cover-letter generation.",
     )
 
+    # --- Tailoring Cost Control ---
+    tailoring_max_listings: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Max listings to send through resume + cover-letter tailoring per run. "
+            "0 = no cap (tailor all qualified). "
+            "When set, the ranking node selects the top-N by salary (salary_max desc) "
+            "and marks the rest SKIPPED. Discovery and job analysis still run on all listings."
+        ),
+    )
+
     # --- Discovery Node ---
     # Session persistence
     discovery_sessions_dir: str = Field(

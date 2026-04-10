@@ -27,6 +27,7 @@ from pipelines.job_agent.nodes.filtering import filtering_node
 from pipelines.job_agent.nodes.job_analysis import job_analysis_node
 from pipelines.job_agent.nodes.manual_extraction import manual_extraction_node
 from pipelines.job_agent.nodes.notification import notification_node
+from pipelines.job_agent.nodes.ranking import ranking_node
 from pipelines.job_agent.nodes.tailoring import tailoring_node
 from pipelines.job_agent.nodes.tracking import tracking_node
 from pipelines.job_agent.state import JobAgentState
@@ -72,11 +73,11 @@ def _should_continue_after_manual_extraction(state: JobAgentState) -> str:
 
 
 def _should_continue_after_job_analysis(state: JobAgentState) -> str:
-    """Route after job analysis: tailor if at least one analysis succeeded."""
+    """Route after job analysis: rank+tailor if at least one analysis succeeded."""
     if not state.job_analyses:
         logger.info("job_analysis_empty", errors=len(state.errors))
         return "notification"
-    return "tailoring"
+    return "ranking"
 
 
 def _llm_node_wrapper(
@@ -136,6 +137,7 @@ def build_graph(
             _llm_node_wrapper(cover_letter_tailoring_node, llm_client=llm_client),
         ),
     )
+    graph.add_node("ranking", ranking_node)
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
 
@@ -164,10 +166,12 @@ def build_graph(
         "job_analysis",
         _should_continue_after_job_analysis,
         {
-            "tailoring": "tailoring",
+            "ranking": "ranking",
             "notification": "notification",
         },
     )
+
+    graph.add_edge("ranking", "tailoring")
 
     graph.add_edge("tailoring", "cover_letter_tailoring")
     graph.add_edge("cover_letter_tailoring", "tracking")
