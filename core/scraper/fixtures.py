@@ -34,7 +34,6 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from core.config import get_settings
 from core.scraper.path_safety import safe_join, validate_site_id
 
 if TYPE_CHECKING:
@@ -42,7 +41,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-_DEFAULT_FIXTURES_DIR = Path(get_settings().scraper_fixtures_dir)
+_DEFAULT_FIXTURES_DIR = Path("pipelines/scraper/fixtures")
 
 _TAG_RE = re.compile(r"<(\w+)(?:\s+([^>]*?))?\s*/?>", re.DOTALL)
 _CLASS_RE = re.compile(r'class\s*=\s*"([^"]*)"')
@@ -234,7 +233,12 @@ class FixtureStore:
     """Manages capture, storage, and retrieval of site fixtures."""
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
-        self._base_dir = Path(base_dir or _DEFAULT_FIXTURES_DIR)
+        if base_dir is None:
+            from core.config import get_settings
+
+            self._base_dir = Path(get_settings().scraper_fixtures_dir)
+        else:
+            self._base_dir = Path(base_dir)
 
     def _site_dir(self, site_id: str) -> Path:
         return safe_join(self._base_dir, site_id)

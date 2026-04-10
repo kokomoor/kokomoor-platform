@@ -20,15 +20,19 @@ class TestAntiDetectionScript:
         assert "param === 37445" in ANTI_DETECTION_SCRIPT
         assert "param === 37446" in ANTI_DETECTION_SCRIPT
 
-    def test_canvas_noise_is_per_call_not_fixed_offset(self) -> None:
-        assert "channelNoise" in ANTI_DETECTION_SCRIPT
-        assert "crypto.getRandomValues" in ANTI_DETECTION_SCRIPT
+    def test_canvas_noise_is_deterministic_per_canvas(self) -> None:
+        assert "canvasNoise = new WeakMap()" in ANTI_DETECTION_SCRIPT
+        assert "canvasNoise.get(canvas)" in ANTI_DETECTION_SCRIPT
+        assert "canvasNoise.set(canvas, noise)" in ANTI_DETECTION_SCRIPT
 
     def test_spoofs_chrome_runtime_surface(self) -> None:
         assert "window.chrome" in ANTI_DETECTION_SCRIPT
         assert "chrome.runtime" in ANTI_DETECTION_SCRIPT
         assert "connect:" in ANTI_DETECTION_SCRIPT
         assert "sendMessage:" in ANTI_DETECTION_SCRIPT
+        assert "onConnect" in ANTI_DETECTION_SCRIPT
+        assert "onMessage" in ANTI_DETECTION_SCRIPT
+        assert "id: ''" in ANTI_DETECTION_SCRIPT
 
     def test_webgl_spoofing_is_platform_aware(self) -> None:
         assert "navigator.userAgent" in ANTI_DETECTION_SCRIPT
@@ -36,3 +40,7 @@ class TestAntiDetectionScript:
         assert "/Linux/" in ANTI_DETECTION_SCRIPT
         assert "Mesa" in ANTI_DETECTION_SCRIPT
         assert "ANGLE" in ANTI_DETECTION_SCRIPT
+
+    def test_permissions_matches_notification_permission(self) -> None:
+        assert "Notification.permission" in ANTI_DETECTION_SCRIPT
+        assert "perm === 'default' ? 'prompt' : perm" in ANTI_DETECTION_SCRIPT

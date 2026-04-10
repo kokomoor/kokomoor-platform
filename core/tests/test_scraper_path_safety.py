@@ -21,3 +21,15 @@ def test_safe_join_stays_within_base() -> None:
     base = Path("/tmp/example-base")
     joined = safe_join(base, "indeed")
     assert str(joined).endswith("/tmp/example-base/indeed")
+
+
+def test_safe_join_rejects_symlink_escape(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    base.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped = base / "escaped"
+    escaped.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        safe_join(base, "escaped")

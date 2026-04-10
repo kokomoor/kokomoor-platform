@@ -202,6 +202,8 @@ class WebAgentController:
                 return await self._execute_click(action)
             if action.action == "fill":
                 return await self._execute_fill(action)
+            if action.action == "type_text":
+                return await self._execute_type_text(action)
             if action.action == "select":
                 return await self._execute_select(action)
             if action.action == "check":
@@ -260,6 +262,21 @@ class WebAgentController:
         if action.value:
             return await self._actions.fill("input, textarea", action.value)
         return ActionResult(success=False, error="No element_index or value for fill")
+
+    async def _execute_type_text(self, action: AgentAction) -> ActionResult:
+        if action.element_index is not None:
+            el = await self._observer.get_element_by_index(action.element_index)
+            if el is not None:
+                try:
+                    await self._actions._behavior.human_click(self._actions.page, el)
+                    await self._actions._behavior.type_with_cadence(el, action.value or "")
+                    await self._actions._behavior.between_actions_pause()
+                    return ActionResult(success=True)
+                except Exception as exc:
+                    return ActionResult(success=False, error=str(exc)[:300])
+        if action.value:
+            return await self._actions.type_text("input, textarea", action.value)
+        return ActionResult(success=False, error="No element_index or value for type_text")
 
     async def _execute_select(self, action: AgentAction) -> ActionResult:
         if action.element_index is not None:

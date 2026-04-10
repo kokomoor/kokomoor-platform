@@ -27,6 +27,7 @@ from core.browser.actions import BrowserActions
 from core.browser.human_behavior import HumanBehavior
 from core.scraper.fixtures import FixtureStore, compute_fingerprint
 from core.scraper.path_safety import validate_site_id
+from pipelines.scraper.models import SiteProfile
 
 if TYPE_CHECKING:
     from core.llm.protocol import LLMClient
@@ -213,7 +214,9 @@ Generate a complete SiteProfile JSON for this site."""
         text = response_text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        return json.loads(text)  # type: ignore[no-any-return]
+        parsed = json.loads(text)
+        validated = SiteProfile.model_validate(parsed)
+        return validated.model_dump(mode="json")
     except (json.JSONDecodeError, Exception) as exc:
         logger.error("onboard.profile_generation_failed", error=str(exc)[:300])
         return {}

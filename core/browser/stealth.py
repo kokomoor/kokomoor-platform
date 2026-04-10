@@ -125,12 +125,28 @@ ANTI_DETECTION_SCRIPT: str = """
   }
   if (!window.chrome.runtime) {
     const noop = () => {};
-    const noopPort = { onMessage: { addListener: noop, removeListener: noop }, postMessage: noop, disconnect: noop };
+    const makeEvent = () => ({
+      addListener: noop,
+      removeListener: noop,
+      hasListener: () => false,
+      hasListeners: () => false,
+    });
+    const noopPort = {
+      name: '',
+      sender: undefined,
+      onMessage: makeEvent(),
+      onDisconnect: makeEvent(),
+      postMessage: noop,
+      disconnect: noop,
+    };
     Object.defineProperty(window.chrome, 'runtime', {
       value: {
+        onConnect: makeEvent(),
+        onMessage: makeEvent(),
+        onInstalled: makeEvent(),
         connect: function() { return noopPort; },
         sendMessage: function() {},
-        id: undefined,
+        id: '',
       },
       configurable: false,
       enumerable: true,
@@ -165,7 +181,7 @@ ANTI_DETECTION_SCRIPT: str = """
     };
   }
 
-  // 4. Canvas fingerprint noise — low-amplitude random jitter per call
+  // 4. Canvas fingerprint noise — deterministic per-canvas jitter
   const randByte = () => {
     try {
       const arr = new Uint8Array(1);
@@ -175,16 +191,24 @@ ANTI_DETECTION_SCRIPT: str = """
       return Math.floor(Math.random() * 256);
     }
   };
-  const channelNoise = () => (randByte() % 3) + 1;
+  const canvasNoise = new WeakMap();
+  const channelNoise = (canvas) => {
+    const cached = canvasNoise.get(canvas);
+    if (cached) return cached;
+    const noise = [((randByte() % 3) + 1), ((randByte() % 3) + 1), ((randByte() % 3) + 1)];
+    canvasNoise.set(canvas, noise);
+    return noise;
+  };
   const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
   HTMLCanvasElement.prototype.toDataURL = function(...args) {
     try {
       const ctx = this.getContext('2d');
       if (ctx) {
         const pixel = ctx.getImageData(0, 0, 1, 1);
-        pixel.data[0] = (pixel.data[0] + channelNoise()) % 256;
-        pixel.data[1] = (pixel.data[1] + channelNoise()) % 256;
-        pixel.data[2] = (pixel.data[2] + channelNoise()) % 256;
+        const [rNoise, gNoise, bNoise] = channelNoise(this);
+        pixel.data[0] = (pixel.data[0] + rNoise) % 256;
+        pixel.data[1] = (pixel.data[1] + gNoise) % 256;
+        pixel.data[2] = (pixel.data[2] + bNoise) % 256;
         pixel.data[3] = 255;
         ctx.putImageData(pixel, 0, 0);
       }
@@ -220,7 +244,11 @@ ANTI_DETECTION_SCRIPT: str = """
     const origQuery = navigator.permissions.query.bind(navigator.permissions);
     navigator.permissions.query = function(desc) {
       if (desc.name === 'notifications') {
-        return Promise.resolve({ state: 'prompt', onchange: null });
+        const perm = (typeof Notification !== 'undefined' && Notification.permission)
+          ? Notification.permission
+          : 'default';
+        const state = perm === 'default' ? 'prompt' : perm;
+        return Promise.resolve({ state, onchange: null });
       }
       return origQuery(desc);
     };

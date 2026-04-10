@@ -27,15 +27,14 @@ def test_sensitive_values_redacted_in_history_prompt() -> None:
 
 
 def test_type_text_values_redacted_in_history_prompt() -> None:
-    """Defensive: type_text is not yet in the AgentAction Literal, but the
-    redaction code path must handle it for forward-compatibility."""
+    """type_text payloads are always redacted in verbose history."""
     AgentStep.model_rebuild(_types_namespace={"ActionResult": ActionResult})
     goal = AgentGoal(instruction="Type credentials")
     ctx = AgentContextManager(goal=goal, keep_recent=5)
 
-    action = AgentAction.model_construct(
+    action = AgentAction(
         reasoning="type password",
-        action="type_text",  # type: ignore[arg-type]
+        action="type_text",
         element_index=3,
         value="my-secret-pw",
         confidence=1.0,
@@ -58,9 +57,9 @@ def test_type_text_redacted_in_summary_path() -> None:
     goal = AgentGoal(instruction="Type credentials")
     ctx = AgentContextManager(goal=goal, keep_recent=0)
 
-    action = AgentAction.model_construct(
+    action = AgentAction(
         reasoning="type secret",
-        action="type_text",  # type: ignore[arg-type]
+        action="type_text",
         element_index=1,
         value="classified-data",
         confidence=1.0,

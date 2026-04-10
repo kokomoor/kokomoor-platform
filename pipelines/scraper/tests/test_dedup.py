@@ -10,6 +10,7 @@ Validates:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -125,6 +126,28 @@ class TestDedupEngine:
         await tmp_dedup.add_batch("site_a", ["k1", "k2"])
         await tmp_dedup.add_batch("site_a", ["k1", "k2", "k3"])
         assert await tmp_dedup.count("site_a") == 3
+
+    @pytest.mark.asyncio
+    async def test_add_batch_returns_exact_new_count_for_duplicate_inputs(
+        self, tmp_dedup: DedupEngine
+    ) -> None:
+        inserted = await tmp_dedup.add_batch("site_a", ["k1", "k1", "k2"])
+        assert inserted == 2
+        inserted_again = await tmp_dedup.add_batch("site_a", ["k1", "k2", "k2"])
+        assert inserted_again == 0
+
+    @pytest.mark.asyncio
+    async def test_prune_and_add_batch_can_run_concurrently(self, tmp_path: Path) -> None:
+        engine = DedupEngine(tmp_path / "dedup.db", ttl_days=0)
+        await engine.add_batch("site_a", [f"seed_{i}" for i in range(100)])
+        await asyncio.gather(
+            engine.prune("site_a", max_age_days=365),
+            engine.add_batch("site_a", [f"new_{i}" for i in range(100)]),
+        )
+        count = await engine.count("site_a")
+        assert count >= 200
+        assert await engine.contains("site_a", "new_42")
+        engine.close()
 
 
 class TestDedupEngineScale:

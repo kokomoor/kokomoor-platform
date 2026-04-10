@@ -44,14 +44,20 @@ _USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 ]
 
-_ACCEPT_LANGUAGES = [
-    "en-US,en;q=0.9",
-    "en-US,en;q=0.9,es;q=0.8",
-    "en-GB,en;q=0.9,en-US;q=0.8",
-    "en-US,en;q=0.5",
+_HEADER_PROFILES = [
+    {
+        "accept_language": "en-US,en;q=0.9",
+        "accept_encoding": "gzip, deflate, br",
+    },
+    {
+        "accept_language": "en-US,en;q=0.9,es;q=0.8",
+        "accept_encoding": "gzip, deflate, br",
+    },
+    {
+        "accept_language": "en-GB,en;q=0.9,en-US;q=0.8",
+        "accept_encoding": "gzip, deflate, br",
+    },
 ]
-
-_ACCEPT_ENCODINGS = ["gzip, deflate, br", "gzip, deflate", "gzip, deflate, br, zstd"]
 
 # Patterns that indicate the response is a block, not real content.
 _BLOCK_PATTERNS = [
@@ -149,11 +155,12 @@ class StealthHttpClient:
         self._robots = _RobotsCache()
 
     def _random_headers(self) -> dict[str, str]:
+        header_profile = random.choice(_HEADER_PROFILES)
         return {
             "User-Agent": random.choice(_USER_AGENTS),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": random.choice(_ACCEPT_LANGUAGES),
-            "Accept-Encoding": random.choice(_ACCEPT_ENCODINGS),
+            "Accept-Language": header_profile["accept_language"],
+            "Accept-Encoding": header_profile["accept_encoding"],
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Sec-Fetch-Dest": "document",

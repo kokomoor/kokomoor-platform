@@ -36,7 +36,6 @@ logger = structlog.get_logger(__name__)
 
 HealCallback = Callable[[str], Awaitable[None]]
 
-_HEAL_TRIGGER_PATTERN = re.compile(r"^\s*fix\s*$", re.IGNORECASE | re.MULTILINE)
 _HEAL_ID_PATTERN = re.compile(r"Heal ID:\s*(\w+)")
 _HEAL_TOKEN_PATTERN = re.compile(r"Heal Token:\s*([A-Za-z0-9._-]+)")
 
@@ -123,7 +122,7 @@ class InboxWatcher:
                     await self._mark_seen(imap, uid)
                     continue
 
-                if not _HEAL_TRIGGER_PATTERN.search(body):
+                if not self._is_explicit_fix_reply(body):
                     continue
 
                 heal_id = self._extract_heal_id(subject, body)
@@ -228,6 +227,18 @@ class InboxWatcher:
             if match:
                 return match.group(1)
         return None
+
+    @staticmethod
+    def _is_explicit_fix_reply(body: str) -> bool:
+        """Accept only direct operator intent, not quoted thread history."""
+        for line in body.splitlines():
+            trimmed = line.strip()
+            if not trimmed:
+                continue
+            if trimmed.startswith(">"):
+                continue
+            return trimmed.lower() == "fix"
+        return False
 
     async def _mark_seen(self, imap: Any, uid: str) -> None:
         """Mark a processed message as seen to avoid repeated triggers."""

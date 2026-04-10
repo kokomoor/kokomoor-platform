@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from core.browser.actions import ActionResult
@@ -28,6 +28,7 @@ class AgentAction(BaseModel):
     action: Literal[
         "click",
         "fill",
+        "type_text",
         "select",
         "check",
         "scroll",
@@ -57,6 +58,8 @@ class AgentAction(BaseModel):
 class AgentStep(BaseModel):
     """One completed observe-act cycle in the agent history."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     step_number: int
     page_url: str
     action_taken: AgentAction
@@ -64,9 +67,6 @@ class AgentStep(BaseModel):
     page_state_summary: str = Field(
         description="Compressed one-line summary of the page state for history."
     )
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class AgentGoal(BaseModel):

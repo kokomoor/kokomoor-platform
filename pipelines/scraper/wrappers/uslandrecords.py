@@ -91,11 +91,15 @@ class USLandRecordsWrapper(BaseSiteWrapper):
     def _detect_vendor(self, html: str) -> None:
         """Detect which backend vendor this portal instance uses."""
         html_lower = html.lower()
-        if "laredo" in html_lower or "laredoapp" in html_lower:
+        if "laredoapp" in html_lower or 'id="laredocontainer"' in html_lower:
             self._vendor = VendorType.LAREDO
-        elif "kofile" in html_lower or "govos" in html_lower:
+        elif "kofile" in html_lower or "govos" in html_lower or 'id="kofile-app"' in html_lower:
             self._vendor = VendorType.KOFILE
-        elif "uslandrecords" in html_lower or "uslr" in html_lower:
+        elif (
+            "uslandrecords.com" in html_lower
+            or "i2l.uslandrecords.com" in html_lower
+            or 'id="searchresultstable"' in html_lower
+        ):
             self._vendor = VendorType.NATIVE
         else:
             self._vendor = VendorType.UNKNOWN

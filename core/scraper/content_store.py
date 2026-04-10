@@ -195,11 +195,12 @@ class ContentStore:
         cutoff = date.today() - timedelta(days=self._compress_after_days)
         compressed = 0
 
-        dirs = (
-            [self._site_dir(validate_site_id(site_id))]
-            if site_id
-            else list(self._base_dir.iterdir())
-        )
+        if site_id:
+            dirs = [self._site_dir(validate_site_id(site_id))]
+        else:
+            if not self._base_dir.exists():
+                return 0
+            dirs = list(self._base_dir.iterdir())
 
         for site_dir in dirs:
             if not site_dir.is_dir():
