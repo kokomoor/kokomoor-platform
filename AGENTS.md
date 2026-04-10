@@ -14,7 +14,11 @@ Personal agentic pipeline platform. Shared infrastructure (`core/`) powers self-
 ```
 core/           Shared library: config, database, LLM, browser, observability, notifications
 pipelines/      Self-contained pipelines (each has own models, nodes, tests, Dockerfile)
+  job_agent/    Pipeline 1: job search automation
+    discovery/  Browser + HTTP providers, session persistence, rate limiting, dedup, prefilter
+    nodes/      Pipeline nodes: discovery, bulk_extraction, filtering, job_analysis, tailoring, ...
 alembic/        Database migrations (shared)
+data/sessions/  Browser session storage (gitignored)
 docs/           Architecture docs, decisions, glossary
 scripts/        Setup scripts
 .github/        CI workflow
@@ -39,6 +43,7 @@ CI (`.github/workflows/ci.yml`) enforces this on all PRs to `main`.
 - **Each pipeline is self-contained.** Own models, nodes, state, tests, prompts. Imports only from `core/`.
 - **Never auto-submit applications.** The job agent must pause for human approval before any submission.
 - **All browser automation goes through `BrowserManager`.** Stealth and rate limiting are mandatory.
+- **Browser sessions are gitignored and human-simulated.** All providers use `BrowserManager` with stored sessions. Direct Playwright usage outside of `BrowserManager` is forbidden. Human behavior simulation (`HumanBehavior` class) is mandatory for all interactive browser actions in discovery.
 - **LLM calls go through `LLMClient` protocol.** Pipeline code never imports provider SDKs directly.
 - **All config via `KP_*` env vars.** Add new settings to `core/config.py`. See `.env.example`.
 
@@ -54,5 +59,7 @@ CI (`.github/workflows/ci.yml`) enforces this on all PRs to `main`.
 These directories have their own `AGENTS.md` with local rules:
 
 - `core/AGENTS.md` — shared infrastructure rules
+- `core/browser/AGENTS.md` — browser stealth stack, session persistence, `BrowserManager` rules
 - `core/llm/AGENTS.md` — LLM abstraction and provider implementation
 - `pipelines/job_agent/AGENTS.md` — job pipeline domain, nodes, and constraints
+- `pipelines/job_agent/discovery/AGENTS.md` — discovery subsystem contract, provider checklist

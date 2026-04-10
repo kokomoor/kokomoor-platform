@@ -47,4 +47,31 @@ Short records of key choices and their rationale. Reference these when asking "w
 ### D9: Code-based .docx rendering over template file
 
 **Choice:** Build resume documents programmatically with python-docx rather than filling a committed `.docx` template.
-**Why:** Fully deterministic — styling is defined in code, no binary files in git. Easier to test (no template file dependency). The `KP_RESUME_TEMPLATE_PATH` setting is reserved for a future user-supplied template if needed.
+**Why:** Fully deterministic -- styling is defined in code, no binary files in git. Easier to test (no template file dependency). The `KP_RESUME_TEMPLATE_PATH` setting is reserved for a future user-supplied template if needed.
+
+---
+
+### D10: Discovery emits ListingRef, not full JobListing
+
+**Choice:** Discovery collects minimal card data (`ListingRef`); `bulk_extraction_node` fetches full descriptions after filtering.
+**Why:** Avoids fetching full pages for listings that will be filtered by salary/keywords. Filtering on card metadata (title, company, partial salary) is sufficient to cut 60-80% of listings before the expensive full-page fetch. This keeps session exposure time low and reduces risk of bot detection.
+
+### D11: Browser sessions are persisted and reused
+
+**Choice:** `data/sessions/<provider>.json` stores Playwright `storage_state` between runs.
+**Why:** Established sessions with cookies and browsing history are dramatically less likely to trigger bot detection than fresh contexts. LinkedIn specifically requires session warmup over multiple days before reliable operation. The session directory is gitignored.
+
+### D12: Two-tier provider architecture within one node
+
+**Choice:** Browser and HTTP providers coexist in the same discovery node, coordinated by `DiscoveryOrchestrator`.
+**Why:** Greenhouse and Lever have excellent public APIs -- using a browser for them would be slower and increase detection risk unnecessarily. The protocol-based `ProviderAdapter` allows both tiers to be coordinated by the same orchestrator. A future API pipeline (LinkedIn Jobs API, Indeed Publisher API, etc.) will require approved partner access; these adapters will be migrated when access is granted.
+
+### D13: Semaphore-bounded concurrent providers
+
+**Choice:** `asyncio.Semaphore(max_concurrent_providers)` inside `asyncio.gather`, not unbounded gather.
+**Why:** Each browser provider opens a Chromium process with distinct fingerprint and session. Running all of them simultaneously from a single IP triggers IP-level rate limiting and cross-session correlation at CDN/WAF layers. Bounding concurrency (default 3) keeps the IP footprint realistic. The semaphore is acquired inside each task, so `gather` still dispatches all tasks but only N execute at any time.
+
+### D14: CAPTCHA tiered strategy
+
+**Choice:** Three-tier CAPTCHA handling: `avoid` (skip provider immediately), `pause_notify` (wait + alert human), `solve` (automated 2captcha).
+**Why:** CAPTCHAs indicate detection — solving one doesn't fix the underlying signal. The `avoid` tier prevents wasted browser time. `pause_notify` lets a human intervene (manual solve, session refresh) which is the safest response. `solve` is the last resort for providers where automated solving is reliable (primarily Cloudflare Turnstile). Default is `pause_notify` because most CAPTCHAs on job boards indicate session/fingerprint problems that automated solving won't resolve long-term.

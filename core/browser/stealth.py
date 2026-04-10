@@ -9,7 +9,10 @@ headless Chrome instance running on a Ryzen server.
 from __future__ import annotations
 
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 # Realistic desktop user agents (rotate per session).
 _USER_AGENTS = [
@@ -73,3 +76,90 @@ async def human_delay(min_ms: int = 500, max_ms: int = 2000) -> None:
 
     delay = random.randint(min_ms, max_ms) / 1000.0
     await asyncio.sleep(delay)
+
+
+# ---------------------------------------------------------------------------
+# Page-level anti-detection script
+# ---------------------------------------------------------------------------
+# Injected via page.add_init_script() so it runs before any page JS,
+# including bot-detection libraries. Covers vectors that context-level
+# settings (UA, viewport, timezone, locale) cannot address.
+# ---------------------------------------------------------------------------
+
+ANTI_DETECTION_SCRIPT: str = """
+(() => {
+  // 1. Hide navigator.webdriver flag
+  Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined,
+    configurable: false,
+  });
+
+  // 2. Fake navigator.plugins with realistic Chrome entries
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+      const makePlugin = (name, filename) => {
+        const p = Object.create(Plugin.prototype);
+        Object.defineProperty(p, 'name', { get: () => name });
+        Object.defineProperty(p, 'filename', { get: () => filename });
+        Object.defineProperty(p, 'length', { get: () => 0 });
+        return p;
+      };
+      const list = [
+        makePlugin('Chrome PDF Plugin', 'internal-pdf-viewer'),
+        makePlugin('Chrome PDF Viewer', 'mhjfbmdgcfjbbpaeojofohoefgiehjai'),
+      ];
+      list.item = (i) => list[i] || null;
+      list.namedItem = (n) => list.find(p => p.name === n) || null;
+      list.refresh = () => {};
+      return list;
+    },
+    configurable: false,
+  });
+
+  // 3. WebGL vendor/renderer spoofing (both WebGL1 and WebGL2)
+  const origGetParameter = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function(param) {
+    if (param === 37445) return 'Intel Inc.';
+    if (param === 37446) return 'Intel Iris OpenGL Engine';
+    return origGetParameter.call(this, param);
+  };
+  if (typeof WebGL2RenderingContext !== 'undefined') {
+    const origGetParameter2 = WebGL2RenderingContext.prototype.getParameter;
+    WebGL2RenderingContext.prototype.getParameter = function(param) {
+      if (param === 37445) return 'Intel Inc.';
+      if (param === 37446) return 'Intel Iris OpenGL Engine';
+      return origGetParameter2.call(this, param);
+    };
+  }
+
+  // 4. Canvas fingerprint noise — deterministic per-context via timestamp seed
+  const seed = Date.now() % 256;
+  const dr = (seed % 3) + 1;
+  const dg = ((seed >> 2) % 3) + 1;
+  const db = ((seed >> 4) % 3) + 1;
+  const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toDataURL = function(...args) {
+    try {
+      const ctx = this.getContext('2d');
+      if (ctx) {
+        const pixel = ctx.getImageData(0, 0, 1, 1);
+        pixel.data[0] = (pixel.data[0] + dr) % 256;
+        pixel.data[1] = (pixel.data[1] + dg) % 256;
+        pixel.data[2] = (pixel.data[2] + db) % 256;
+        pixel.data[3] = 255;
+        ctx.putImageData(pixel, 0, 0);
+      }
+    } catch (e) { /* canvas may be tainted or WebGL-only */ }
+    return origToDataURL.apply(this, args);
+  };
+})();
+"""
+
+
+async def apply_page_stealth(page: Page) -> None:
+    """Register anti-detection JS to run before any page script.
+
+    Must be called before navigation so the init script is active
+    at document creation time.
+    """
+    await page.add_init_script(ANTI_DETECTION_SCRIPT)

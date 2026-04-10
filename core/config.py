@@ -209,6 +209,93 @@ class Settings(BaseSettings):
         description="Enable optional critique pass for cover-letter generation.",
     )
 
+    # --- Discovery Node ---
+    # Session persistence
+    discovery_sessions_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "sessions"),
+        description="Directory for browser session storage_state JSON files (gitignored).",
+    )
+
+    # Concurrency
+    discovery_max_concurrent_providers: int = Field(
+        default=2,
+        ge=1,
+        le=6,
+        description="Max browser providers running simultaneously (each uses one Playwright context).",
+    )
+    discovery_max_pages_per_search: int = Field(
+        default=8,
+        ge=1,
+        le=30,
+        description="Max search result pages to paginate per keyword/provider combination.",
+    )
+    discovery_max_listings_per_provider: int = Field(
+        default=150,
+        ge=10,
+        description="Hard cap on listings collected per provider per run.",
+    )
+    discovery_session_max_age_hours: int = Field(
+        default=72,
+        ge=1,
+        description="Treat saved session as stale if older than this many hours.",
+    )
+
+    # LinkedIn credentials
+    linkedin_email: str = Field(
+        default="", description="LinkedIn account email for job search login."
+    )
+    linkedin_password: SecretStr = Field(
+        default=SecretStr(""),
+        description="LinkedIn account password. Never logged.",
+    )
+
+    # Target company lists for ATS providers (comma-separated slugs)
+    greenhouse_target_companies: str = Field(
+        default="",
+        description="Comma-separated Greenhouse company board slugs (e.g. 'anduril,palantir,scale-ai').",
+    )
+    lever_target_companies: str = Field(
+        default="",
+        description="Comma-separated Lever company slugs (e.g. 'openai,anthropic').",
+    )
+    workday_target_companies: str = Field(
+        default="",
+        description="Comma-separated 'company:subdomain' pairs for Workday (e.g. 'Anduril:anduril').",
+    )
+    direct_site_configs: str = Field(
+        default="",
+        description="Path to YAML file defining direct career-site scrape targets. Optional.",
+    )
+
+    # CAPTCHA handling
+    captcha_strategy: Literal["avoid", "pause_notify", "solve"] = Field(
+        default="pause_notify",
+        description="CAPTCHA response strategy. 'solve' requires captcha_api_key.",
+    )
+    captcha_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="2captcha/anticaptcha API key. Only used when captcha_strategy='solve'.",
+    )
+
+    # Pre-filter
+    discovery_prefilter_min_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Minimum rule-based fit score to include listing. 0.0 = accept everything.",
+    )
+
+    # Provider enable flags
+    discovery_linkedin_enabled: bool = Field(default=True)
+    discovery_indeed_enabled: bool = Field(default=True)
+    discovery_builtin_enabled: bool = Field(default=True)
+    discovery_wellfound_enabled: bool = Field(default=False, description="Requires login.")
+    discovery_greenhouse_enabled: bool = Field(default=True)
+    discovery_lever_enabled: bool = Field(default=True)
+    discovery_workday_enabled: bool = Field(
+        default=False, description="Requires target company list."
+    )
+
     # --- Feature Flags ---
     enable_browser_stealth: bool = Field(
         default=True,
@@ -229,6 +316,21 @@ class Settings(BaseSettings):
     def has_langsmith_key(self) -> bool:
         """Check if LangSmith tracing is configured."""
         return bool(self.langsmith_api_key.get_secret_value())
+
+    @property
+    def greenhouse_company_list(self) -> list[str]:
+        """Parse greenhouse_target_companies into a list of slugs."""
+        return [s.strip() for s in self.greenhouse_target_companies.split(",") if s.strip()]
+
+    @property
+    def lever_company_list(self) -> list[str]:
+        """Parse lever_target_companies into a list of slugs."""
+        return [s.strip() for s in self.lever_target_companies.split(",") if s.strip()]
+
+    @property
+    def workday_company_list(self) -> list[str]:
+        """Parse workday_target_companies into a list of 'Name:subdomain[:wdN]' entries."""
+        return [s.strip() for s in self.workday_target_companies.split(",") if s.strip()]
 
 
 @lru_cache(maxsize=1)

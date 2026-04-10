@@ -67,7 +67,24 @@ pipelines/<name>/
 ├── state.py             Typed state dataclass
 ├── models/              SQLModel + Pydantic models
 ├── nodes/               Pure functions: (state) -> state
+│   ├── discovery.py     Orchestrates providers, dedup, prefilter
+│   ├── bulk_extraction.py  Fetches full job descriptions post-filtering
+│   ├── job_analysis.py  LLM-based JD analysis
+│   └── ...
+├── discovery/           [job_agent] Browser + HTTP provider subsystem
+│   ├── models.py        ListingRef, DiscoveryConfig, ProviderResult
+│   ├── orchestrator.py  Fan-out to providers, aggregate results
+│   ├── providers/       Per-board adapters (LinkedIn, Indeed, Greenhouse, etc.)
+│   ├── session.py       Playwright storage_state persistence
+│   ├── rate_limiter.py  Per-domain rate limiting
+│   ├── human_behavior.py  Realistic mouse/scroll/type simulation
+│   ├── captcha.py       Detection + tiered response
+│   ├── deduplication.py In-run + DB dedup
+│   ├── prefilter.py     Rule-based fit scoring
+│   └── url_utils.py     URL canonicalization
+├── extraction/          Layered HTML scraping for full page content
 ├── resume/              [job_agent] Tailoring subsystem: profile, applier, renderer
+├── cover_letter/        [job_agent] Cover letter subsystem
 ├── prompts/             Markdown prompt templates
 ├── tests/               Unit tests with mocked externals
 ├── context/             Pipeline-specific reference data (gitignored)
@@ -77,6 +94,28 @@ pipelines/<name>/
 ## Context folder
 
 The root `/context/` directory is **gitignored** — local-only reference materials (resumes, cover letters, pitch decks, transcripts). Under `pipelines/job_agent/context/`, real tailoring inputs (including `candidate_profile.yaml`) are **gitignored**; only `candidate_profile.example.yaml` is committed as a schema template. Copy the example to `candidate_profile.yaml` locally. See `pipelines/job_agent/AGENTS.md` for the full inventory.
+
+## Job agent data flow
+
+```
+Discovery (browser/HTTP providers) -> Filtering -> Bulk Extraction (description fetch)
+  -> Job Analysis (LLM) -> Tailoring (LLM) -> Cover Letter Tailoring (LLM)
+  -> Tracking -> Notification
+```
+
+Manual flow: `Manual Extraction (URL) -> Job Analysis -> Tailoring -> Cover Letter Tailoring -> Tracking -> Notification`
+
+## Discovery architecture
+
+The discovery subsystem uses two provider tiers:
+
+**Browser tier** (Playwright + anti-detection): LinkedIn, Indeed, Built In, Wellfound, Workday, direct career sites. Each provider runs in an isolated `BrowserManager` context with a persisted session (`data/sessions/<provider>.json`, gitignored). All page interactions use `HumanBehavior` for realistic timing and mouse movement. `DomainRateLimiter` enforces per-provider delays. `CaptchaHandler` detects and responds to CAPTCHA challenges.
+
+**HTTP tier** (httpx, no browser): Greenhouse and Lever public JSON APIs. No anti-detection required. Runs concurrently without semaphore limits.
+
+The `DiscoveryOrchestrator` coordinates both tiers with `asyncio.gather()`. Browser providers share an `asyncio.Semaphore(max_concurrent_providers)` to limit simultaneous Playwright contexts.
+
+The `bulk_extraction_node` runs after filtering to fetch full job descriptions. Discovery emits minimal metadata (title, company, URL, salary hint) -- description fetch is deferred to after filtering has reduced the listing count.
 
 ## Configuration
 

@@ -31,6 +31,8 @@ data/*.db-journal
 *.docx
 output/
 data/tailored_resumes/
+data/sessions/*
+!data/sessions/.gitkeep
 
 # Docker
 .docker/

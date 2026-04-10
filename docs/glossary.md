@@ -49,11 +49,26 @@
 | **LLMUsage** | Dataclass tracking cumulative tokens, cost, errors, cache hits, and per-call logs. |
 | **structured_complete** | Wrapper that requests JSON from the LLM and validates against a Pydantic model. |
 
+## Discovery concepts
+
+| Term | Definition |
+|------|-----------|
+| **ListingRef** | Minimal listing data from a search result card. Contains URL, title, company, location, and optional salary text. Converted to `JobListing` after deduplication and prefiltering. |
+| **SessionStore** | Manages Playwright `storage_state` persistence per provider. Sessions survive between runs so established accounts don't get re-fingerprinted each time. |
+| **HumanBehavior** | Behavioral simulation class for realistic Playwright interactions (mouse curves, reading pauses, typing cadence). All browser provider actions must use it. |
+| **DomainRateLimiter** | Per-provider token bucket controlling navigation delays. LinkedIn uses 10-25s delays; Greenhouse (HTTP API) uses 0.5-2s. |
+| **ProviderAdapter** | Protocol interface for job board adapters. Separates transport (browser vs HTTP) from the orchestration logic. |
+| **BulkExtraction** | Post-filtering node that fetches full job descriptions for qualified listings before LLM analysis. Defers expensive page fetches until after the listing count is reduced by filtering. |
+| **DiscoveryOrchestrator** | Coordinates all enabled providers (browser + HTTP), aggregates `ListingRef` results, and manages session lifecycle. |
+| **DiscoveryConfig** | Pydantic model built from `KP_DISCOVERY_*` settings. Carries all discovery-specific config (enabled providers, concurrency, rate limits, target companies). Constructed via `DiscoveryConfig.from_settings()`. |
+| **Prefilter** | Rule-based scoring of `ListingRef` metadata (title, location, salary) against `SearchCriteria`. Returns 0.0–1.0 score; listings below `prefilter_min_score` are dropped before `ref_to_job_listing()` conversion. No LLM involved. |
+| **CaptchaHandler** | Detection and tiered response for CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile/JS challenge). Three strategies: `avoid`, `pause_notify`, `solve`. |
+
 ## Infrastructure
 
 | Term | Definition |
 |------|-----------|
 | **`KP_*`** | Environment variable prefix for all platform settings (parsed by Pydantic Settings). |
-| **BrowserManager** | Async context manager wrapping Playwright with stealth defaults and rate limiting. |
-| **Stealth** | Anti-detection measures: randomized user agents, viewports, timezones, human-realistic delays. |
+| **BrowserManager** | Async context manager wrapping Playwright with stealth defaults, rate limiting, and session persistence. |
+| **Stealth** | Anti-detection measures: two layers -- context-level (UA, viewport, timezone) and page-level (webdriver flag, plugins, WebGL, canvas fingerprint noise). |
 | **Tower** | The deployment server (Ubuntu Server 24.04, accessed via Tailscale SSH). |
