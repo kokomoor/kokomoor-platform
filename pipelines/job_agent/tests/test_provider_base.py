@@ -48,6 +48,7 @@ class _TestProvider(BaseProvider):
 def _make_page(*, has_next: bool = False) -> AsyncMock:
     page = AsyncMock()
     page.goto = AsyncMock()
+    page.url = "https://example.com/jobs"
 
     if has_next:
         next_btn = AsyncMock()
@@ -118,6 +119,7 @@ class TestRunSingleSearch:
     async def test_navigation_timeout_returns_empty(self) -> None:
         provider = _TestProvider()
         page = AsyncMock()
+        page.url = "https://example.com/jobs"
         page.goto = AsyncMock(side_effect=TimeoutError("nav timeout"))
 
         refs = await provider._run_single_search(
@@ -134,6 +136,7 @@ class TestRunSingleSearch:
     async def test_wait_happens_before_initial_navigation(self) -> None:
         provider = _TestProvider()
         page = AsyncMock()
+        page.url = "https://example.com/jobs"
         events: list[str] = []
 
         async def _wait() -> None:

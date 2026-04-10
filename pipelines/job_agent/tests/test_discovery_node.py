@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from pipelines.job_agent.discovery.models import ListingRef
+from pipelines.job_agent.discovery.models import ListingRef, ProviderResult
 from pipelines.job_agent.models import ApplicationStatus, JobListing, JobSource, SearchCriteria
 from pipelines.job_agent.nodes.bulk_extraction import bulk_extraction_node
 from pipelines.job_agent.nodes.discovery import discovery_node
@@ -76,6 +76,9 @@ class TestDiscoveryNode:
                 discovery_max_listings_per_provider=50,
                 discovery_session_max_age_hours=72,
                 discovery_prefilter_min_score=0.0,
+                discovery_debug_capture_enabled=False,
+                discovery_debug_capture_dir="data/debug_captures",
+                discovery_debug_capture_html=True,
                 discovery_linkedin_enabled=False,
                 discovery_indeed_enabled=False,
                 discovery_builtin_enabled=False,
@@ -125,6 +128,9 @@ class TestDiscoveryNode:
                 discovery_max_listings_per_provider=50,
                 discovery_session_max_age_hours=72,
                 discovery_prefilter_min_score=0.3,
+                discovery_debug_capture_enabled=False,
+                discovery_debug_capture_dir="data/debug_captures",
+                discovery_debug_capture_html=True,
                 discovery_linkedin_enabled=False,
                 discovery_indeed_enabled=False,
                 discovery_builtin_enabled=False,
@@ -146,6 +152,67 @@ class TestDiscoveryNode:
 
         assert len(result.discovered_listings) == 1
         assert result.discovered_listings[0].title == "Staff Engineer"
+
+    @pytest.mark.asyncio
+    async def test_provider_errors_are_added_to_state_errors(self) -> None:
+        ref = _make_ref()
+
+        with (
+            patch("pipelines.job_agent.nodes.discovery.get_settings") as mock_settings,
+            patch("pipelines.job_agent.nodes.discovery.DiscoveryOrchestrator") as mock_orch_cls,
+            patch(
+                "pipelines.job_agent.nodes.discovery.deduplicate_refs",
+                new_callable=AsyncMock,
+                return_value=[ref],
+            ),
+            patch(
+                "pipelines.job_agent.nodes.discovery.apply_prefilter",
+                return_value=([ref], []),
+            ),
+        ):
+            mock_settings.return_value = MagicMock(
+                discovery_sessions_dir="/tmp/s",
+                discovery_max_concurrent_providers=1,
+                discovery_max_pages_per_search=2,
+                discovery_max_listings_per_provider=50,
+                discovery_session_max_age_hours=72,
+                discovery_prefilter_min_score=0.0,
+                discovery_debug_capture_enabled=False,
+                discovery_debug_capture_dir="data/debug_captures",
+                discovery_debug_capture_html=True,
+                discovery_linkedin_enabled=True,
+                discovery_indeed_enabled=False,
+                discovery_builtin_enabled=False,
+                discovery_wellfound_enabled=False,
+                discovery_greenhouse_enabled=False,
+                discovery_lever_enabled=False,
+                discovery_workday_enabled=False,
+                greenhouse_company_list=[],
+                lever_company_list=[],
+                workday_company_list=[],
+                direct_site_configs="",
+                captcha_strategy="avoid",
+                captcha_api_key=SecretStr(""),
+            )
+            mock_orch = mock_orch_cls.return_value
+            mock_orch.run = AsyncMock(return_value=[ref])
+            mock_orch.last_provider_results = [
+                ProviderResult(
+                    source=JobSource.LINKEDIN,
+                    refs=[],
+                    errors=["auth_failed", "capture:/tmp/debug/metadata.json"],
+                    pages_scraped=0,
+                    session_saved=False,
+                )
+            ]
+
+            state = JobAgentState(search_criteria=SearchCriteria(keywords=["engineer"]))
+            result = await discovery_node(state)
+
+        assert len(result.discovered_listings) == 1
+        assert len(result.errors) == 2
+        assert result.errors[0]["provider"] == JobSource.LINKEDIN.value
+        assert "auth_failed" in result.errors[0]["message"]
 
 
 # ---------------------------------------------------------------------------

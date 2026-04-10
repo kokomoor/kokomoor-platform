@@ -40,7 +40,18 @@ async def discovery_node(state: JobAgentState) -> JobAgentState:
     in_run_seen: set[str] = set()
     orchestrator = DiscoveryOrchestrator()
 
-    refs = await orchestrator.run(state.search_criteria, config, settings)
+    refs = await orchestrator.run(state.search_criteria, config, settings, run_id=state.run_id)
+
+    provider_results = getattr(orchestrator, "last_provider_results", [])
+    for result in provider_results:
+        for err in result.errors:
+            state.errors.append(
+                {
+                    "node": "discovery",
+                    "provider": result.source.value,
+                    "message": err[:500],
+                }
+            )
 
     refs = await deduplicate_refs(refs, in_run_seen=in_run_seen, check_db=True)
 

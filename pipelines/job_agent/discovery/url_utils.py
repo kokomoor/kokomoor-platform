@@ -39,7 +39,7 @@ KEEP_QUERY_KEYS: frozenset[str] = frozenset(
     }
 )
 
-_LINKEDIN_JOB_ID_RE = re.compile(r"/jobs/(?:view/)?(\d+)")
+_LINKEDIN_JOB_ID_RE = re.compile(r"/jobs/(?:view/)?[^?]*?(\d{6,})")
 _LINKEDIN_QUERY_ID_RE = re.compile(r"currentJobId=(\d+)")
 
 

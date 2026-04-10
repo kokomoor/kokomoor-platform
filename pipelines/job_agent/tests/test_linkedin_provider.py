@@ -1,10 +1,14 @@
-"""Tests for the LinkedIn provider — URL builder unit tests only.
+"""Tests for the LinkedIn provider -- URL builder, auth detection, and mode handling.
 
 Full browser tests require a real LinkedIn session and are marked
 @pytest.mark.integration (not run here).
 """
 
 from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
 
 from pipelines.job_agent.discovery.models import DiscoveryConfig
 from pipelines.job_agent.discovery.providers.linkedin import LinkedInProvider
@@ -14,7 +18,7 @@ _DEFAULT_CONFIG = DiscoveryConfig(sessions_dir="/tmp/test-sessions")
 
 
 class TestBuildSearchUrls:
-    def test_keywords_with_location(self) -> None:
+    def test_keywords_each_get_own_url(self) -> None:
         provider = LinkedInProvider()
         criteria = SearchCriteria(
             keywords=["python", "engineer"],
@@ -22,11 +26,12 @@ class TestBuildSearchUrls:
         )
         urls = provider._build_search_urls(criteria, _DEFAULT_CONFIG)
 
-        assert len(urls) == 1
-        assert "keywords=python+engineer" in urls[0]
-        assert "San+Francisco" in urls[0]
+        assert len(urls) == 2
+        assert "keywords=python" in urls[0]
+        assert "keywords=engineer" in urls[1]
+        assert all("San+Francisco" in u for u in urls)
 
-    def test_target_roles_preferred_over_keywords(self) -> None:
+    def test_target_roles_and_keywords_both_generate_urls(self) -> None:
         provider = LinkedInProvider()
         criteria = SearchCriteria(
             keywords=["python"],
@@ -35,10 +40,10 @@ class TestBuildSearchUrls:
         )
         urls = provider._build_search_urls(criteria, _DEFAULT_CONFIG)
 
-        assert len(urls) == 2
+        assert len(urls) == 3
         assert "Software+Engineer" in urls[0]
         assert "Backend+Developer" in urls[1]
-        assert not any("python" in u for u in urls)
+        assert "python" in urls[2]
 
     def test_remote_filter_added_when_remote_ok(self) -> None:
         provider = LinkedInProvider()
@@ -85,13 +90,14 @@ class TestBuildSearchUrls:
 
         assert len(urls) <= 6
 
-    def test_keywords_truncated_to_three(self) -> None:
+    def test_each_keyword_is_separate_url(self) -> None:
         provider = LinkedInProvider()
         criteria = SearchCriteria(keywords=["alpha", "beta", "gamma", "delta", "epsilon"])
         urls = provider._build_search_urls(criteria, _DEFAULT_CONFIG)
 
-        assert "alpha+beta+gamma" in urls[0]
-        assert "delta" not in urls[0]
+        assert len(urls) == 5
+        assert "alpha" in urls[0]
+        assert "beta" in urls[1]
 
     def test_multiple_locations_generate_urls(self) -> None:
         provider = LinkedInProvider()
@@ -148,3 +154,118 @@ class TestProviderAttributes:
         sel = LinkedInProvider()._next_page_selector()
         assert sel is not None
         assert "View next page" in sel
+
+
+class TestAuthDetection:
+    """Tests for is_authenticated() across different page states."""
+
+    @pytest.mark.asyncio
+    async def test_authenticated_on_feed_url(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/feed/"
+
+        assert await provider.is_authenticated(page) is True
+
+    @pytest.mark.asyncio
+    async def test_authenticated_on_jobs_url(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/jobs/search/?keywords=engineer"
+        page.query_selector = AsyncMock(return_value=None)
+        page.evaluate = AsyncMock(return_value=False)
+
+        assert await provider.is_authenticated(page) is True
+
+    @pytest.mark.asyncio
+    async def test_authenticated_on_mynetwork_url(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/mynetwork/"
+
+        assert await provider.is_authenticated(page) is True
+
+    @pytest.mark.asyncio
+    async def test_not_authenticated_on_login_url(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/login?fromSignIn=true"
+
+        assert await provider.is_authenticated(page) is False
+
+    @pytest.mark.asyncio
+    async def test_not_authenticated_on_checkpoint(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/checkpoint/challenge/123"
+
+        assert await provider.is_authenticated(page) is False
+
+    @pytest.mark.asyncio
+    async def test_not_authenticated_when_login_fields_present(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/"
+        page.query_selector = AsyncMock(return_value=object())
+
+        assert await provider.is_authenticated(page) is False
+
+    @pytest.mark.asyncio
+    async def test_not_authenticated_on_guest_jobs(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/jobs/guest/search"
+        page.query_selector = AsyncMock(return_value=None)
+        page.evaluate = AsyncMock(return_value=False)
+
+        assert await provider.is_authenticated(page) is False
+
+    @pytest.mark.asyncio
+    async def test_authenticated_via_global_nav_selector(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/"
+
+        call_count = 0
+
+        async def _query_selector(sel: str) -> object | None:
+            nonlocal call_count
+            call_count += 1
+            if sel == "input#username, input#password":
+                return None
+            if sel == ".global-nav":
+                return object()
+            return None
+
+        page.query_selector = _query_selector
+        page.evaluate = AsyncMock(return_value=False)
+
+        assert await provider.is_authenticated(page) is True
+
+
+class TestSearchPageVerification:
+    """Test that _verify_search_page detects redirects to login/authwall."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_login_redirect(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/login?trk=guest"
+
+        assert await provider._verify_search_page(page, "https://expected.url") is False
+
+    @pytest.mark.asyncio
+    async def test_rejects_authwall(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/authwall?trk=guest"
+
+        assert await provider._verify_search_page(page, "https://expected.url") is False
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_search_page(self) -> None:
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/jobs/search/?keywords=engineer"
+
+        assert await provider._verify_search_page(page, "https://expected.url") is True

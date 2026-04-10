@@ -1,0 +1,11 @@
+{
+  "run_id": "pipeline-20260410-050048-88fb98f4",
+  "source": "linkedin",
+  "stage": "auth_failed",
+  "reason": "provider_authenticate_returned_false",
+  "error": "",
+  "captured_at_utc": "2026-04-10T05:01:34.556946+00:00",
+  "extra": {},
+  "page_url": "https://www.linkedin.com/login?fromSignIn=true&trk=guest_homepage-basic_nav-header-signin",
+  "page_title": "LinkedIn Login, Sign in | LinkedIn"
+}

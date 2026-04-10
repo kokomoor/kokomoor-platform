@@ -149,6 +149,9 @@ class DiscoveryConfig(BaseModel):
     max_listings_per_provider: int = 150
     session_max_age_hours: int = 72
     prefilter_min_score: float = 0.0
+    debug_capture_enabled: bool = False
+    debug_capture_dir: str = "data/debug_captures"
+    debug_capture_html: bool = True
 
     linkedin_enabled: bool = True
     indeed_enabled: bool = True
@@ -177,6 +180,9 @@ class DiscoveryConfig(BaseModel):
             max_listings_per_provider=settings.discovery_max_listings_per_provider,
             session_max_age_hours=settings.discovery_session_max_age_hours,
             prefilter_min_score=settings.discovery_prefilter_min_score,
+            debug_capture_enabled=settings.discovery_debug_capture_enabled,
+            debug_capture_dir=settings.discovery_debug_capture_dir,
+            debug_capture_html=settings.discovery_debug_capture_html,
             linkedin_enabled=settings.discovery_linkedin_enabled,
             indeed_enabled=settings.discovery_indeed_enabled,
             builtin_enabled=settings.discovery_builtin_enabled,

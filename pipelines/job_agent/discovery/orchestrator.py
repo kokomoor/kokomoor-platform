@@ -12,6 +12,10 @@ For each browser provider:
 6. Save session back to SessionStore.
 7. Return ProviderResult.
 
+Auth retry policy: if authentication fails with a loaded session, the session
+is invalidated and the provider is retried once with a fresh browser context.
+This handles stale sessions that cause unexpected auth pages.
+
 Failures in any provider are isolated -- they produce an error-annotated
 ProviderResult but do not propagate exceptions to the caller.
 """
@@ -26,6 +30,7 @@ import structlog
 
 from core.browser import BrowserManager
 from pipelines.job_agent.discovery.captcha import CaptchaHandler
+from pipelines.job_agent.discovery.debug_capture import FailureCapture
 from pipelines.job_agent.discovery.human_behavior import HumanBehavior
 from pipelines.job_agent.discovery.models import ProviderResult
 from pipelines.job_agent.discovery.providers.builtin import BuiltInProvider
@@ -54,16 +59,27 @@ logger = structlog.get_logger(__name__)
 class DiscoveryOrchestrator:
     """Fan out to enabled providers, aggregate and return raw refs."""
 
+    def __init__(self) -> None:
+        self.last_provider_results: list[ProviderResult] = []
+
     async def run(
         self,
         criteria: SearchCriteria,
         config: DiscoveryConfig,
         settings: Settings,
+        *,
+        run_id: str = "",
     ) -> list[ListingRef]:
         """Execute all enabled providers and return aggregated ListingRefs."""
         session_store = SessionStore(Path(config.sessions_dir))
         semaphore = asyncio.Semaphore(config.max_concurrent_providers)
         tasks: list[asyncio.Task[ProviderResult]] = []
+        capture = FailureCapture(
+            enabled=config.debug_capture_enabled,
+            base_dir=config.debug_capture_dir,
+            run_id=run_id or "discovery",
+            include_html=config.debug_capture_html,
+        )
 
         loop = asyncio.get_running_loop()
 
@@ -76,7 +92,12 @@ class DiscoveryOrchestrator:
         ):
             tasks.append(
                 loop.create_task(
-                    self._run_http_greenhouse(config.greenhouse_companies, criteria, config)
+                    self._run_http_greenhouse(
+                        config.greenhouse_companies,
+                        criteria,
+                        config,
+                        capture,
+                    )
                 )
             )
         if (
@@ -85,7 +106,14 @@ class DiscoveryOrchestrator:
             and (requested_sources is None or JobSource.LEVER in requested_sources)
         ):
             tasks.append(
-                loop.create_task(self._run_http_lever(config.lever_companies, criteria, config))
+                loop.create_task(
+                    self._run_http_lever(
+                        config.lever_companies,
+                        criteria,
+                        config,
+                        capture,
+                    )
+                )
             )
 
         browser_providers = self._get_enabled_browser_providers(
@@ -101,11 +129,13 @@ class DiscoveryOrchestrator:
                         settings,
                         session_store,
                         semaphore,
+                        capture,
                     )
                 )
             )
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        provider_results: list[ProviderResult] = []
 
         all_refs: list[ListingRef] = []
         for result in results:
@@ -115,6 +145,7 @@ class DiscoveryOrchestrator:
                     error=str(result)[:300],
                 )
             elif isinstance(result, ProviderResult):
+                provider_results.append(result)
                 all_refs.extend(result.refs)
                 if result.errors:
                     logger.warning(
@@ -128,6 +159,7 @@ class DiscoveryOrchestrator:
                     refs=len(result.refs),
                     pages=result.pages_scraped,
                 )
+        self.last_provider_results = provider_results
 
         logger.info(
             "orchestrator.run_complete",
@@ -175,11 +207,7 @@ class DiscoveryOrchestrator:
         provider: BaseProvider,
         settings: Settings,
     ) -> tuple[str, str] | None:
-        """Return provider-specific credentials or None if unavailable.
-
-        Keeping credential resolution centralized prevents accidental cross-provider
-        credential reuse and makes adding auth providers a localized change.
-        """
+        """Return provider-specific credentials or None if unavailable."""
         if provider.source == JobSource.LINKEDIN:
             email = settings.linkedin_email.strip()
             password = settings.linkedin_password.get_secret_value()
@@ -198,11 +226,26 @@ class DiscoveryOrchestrator:
         settings: Settings,
         session_store: SessionStore,
         semaphore: asyncio.Semaphore,
+        capture: FailureCapture,
     ) -> ProviderResult:
         async with semaphore:
             source = provider.source
+
+            # Proactively discard sessions older than the configured max age.
+            session_age = session_store.age_hours(source)
+            if session_age is not None and session_age > config.session_max_age_hours:
+                logger.info(
+                    "orchestrator.session_expired",
+                    source=source.value,
+                    age_hours=round(session_age, 1),
+                    max_hours=config.session_max_age_hours,
+                )
+                session_store.invalidate(source)
+
             storage_state = session_store.load(source)
-            if storage_state is not None:
+            had_session = storage_state is not None
+
+            if had_session:
                 logger.info(
                     "orchestrator.session_loaded",
                     source=source.value,
@@ -211,108 +254,203 @@ class DiscoveryOrchestrator:
             else:
                 logger.info("orchestrator.no_session", source=source.value)
 
-            behavior = HumanBehavior()
-            rate_limiter = DomainRateLimiter(source)
-            captcha_handler = CaptchaHandler()
+            result = await DiscoveryOrchestrator._attempt_browser_provider(
+                provider=provider,
+                criteria=criteria,
+                config=config,
+                settings=settings,
+                session_store=session_store,
+                capture=capture,
+                storage_state=storage_state,
+            )
 
-            try:
-                async with BrowserManager(storage_state=storage_state) as browser:
-                    page = await browser.new_page()
-                    refs: list[ListingRef] = []
-                    errors: list[str] = []
-                    saved = False
+            # Retry policy: if auth failed and we had a session, invalidate
+            # and retry with a fresh browser context.
+            auth_failed = any(
+                err.startswith("auth_failed") or err.startswith("auth_missing")
+                for err in result.errors
+            )
+            if auth_failed and had_session and provider.requires_auth():
+                logger.info(
+                    "orchestrator.auth_retry_with_fresh_session",
+                    source=source.value,
+                )
+                session_store.invalidate(source)
+                result = await DiscoveryOrchestrator._attempt_browser_provider(
+                    provider=provider,
+                    criteria=criteria,
+                    config=config,
+                    settings=settings,
+                    session_store=session_store,
+                    capture=capture,
+                    storage_state=None,
+                )
 
-                    try:
-                        if provider.requires_auth():
-                            # Delay BEFORE first warm-up navigation to avoid
-                            # "fresh context + instant request" bot signal.
-                            await rate_limiter.wait()
-                            try:
-                                await page.goto(
-                                    f"https://{provider.base_domain()}",
-                                    wait_until="domcontentloaded",
-                                    timeout=20_000,
-                                )
-                                await behavior.reading_pause(800)
-                            except Exception:
+            return result
+
+    @staticmethod
+    async def _attempt_browser_provider(
+        *,
+        provider: BaseProvider,
+        criteria: SearchCriteria,
+        config: DiscoveryConfig,
+        settings: Settings,
+        session_store: SessionStore,
+        capture: FailureCapture,
+        storage_state: dict[str, object] | None,
+    ) -> ProviderResult:
+        """Single attempt to run a browser provider."""
+        source = provider.source
+        behavior = HumanBehavior()
+        rate_limiter = DomainRateLimiter(source)
+        captcha_handler = CaptchaHandler()
+
+        try:
+            async with BrowserManager(storage_state=storage_state) as browser:
+                page = await browser.new_page()
+                refs: list[ListingRef] = []
+                errors: list[str] = []
+                saved = False
+
+                try:
+                    if provider.requires_auth():
+                        await rate_limiter.wait()
+                        try:
+                            await page.goto(
+                                f"https://{provider.base_domain()}",
+                                wait_until="domcontentloaded",
+                                timeout=20_000,
+                            )
+                            await behavior.reading_pause(800)
+                        except Exception:
+                            logger.warning(
+                                "orchestrator.warmup_nav_failed",
+                                source=source.value,
+                                exc_info=True,
+                            )
+                            artifacts = await capture.capture_page_failure(
+                                source=source,
+                                stage="warmup_nav_failed",
+                                reason="provider_warmup_navigation_failed",
+                                page=page,
+                            )
+                            errors.append(f"warmup_nav_failed:{artifacts[0] if artifacts else ''}")
+
+                        if not await provider.is_authenticated(page):
+                            logger.info(
+                                "orchestrator.authenticating",
+                                source=source.value,
+                            )
+                            credentials = DiscoveryOrchestrator._credentials_for_provider(
+                                provider,
+                                settings,
+                            )
+                            if credentials is None:
                                 logger.warning(
-                                    "orchestrator.warmup_nav_failed",
-                                    source=source.value,
-                                    exc_info=True,
-                                )
-
-                            if not await provider.is_authenticated(page):
-                                logger.info(
-                                    "orchestrator.authenticating",
+                                    "orchestrator.auth_missing_credentials",
                                     source=source.value,
                                 )
-                                credentials = DiscoveryOrchestrator._credentials_for_provider(
-                                    provider,
-                                    settings,
+                                artifacts = await capture.capture_page_failure(
+                                    source=source,
+                                    stage="auth_missing_credentials",
+                                    reason="provider_requires_credentials_but_none_configured",
+                                    page=page,
                                 )
-                                if credentials is None:
-                                    logger.warning(
-                                        "orchestrator.auth_missing_credentials",
-                                        source=source.value,
-                                    )
-                                    return ProviderResult(
-                                        source=source,
-                                        refs=[],
-                                        errors=["auth_missing_credentials"],
-                                        pages_scraped=0,
-                                        session_saved=False,
-                                    )
-                                email, password = credentials
-                                success = await provider.authenticate(
-                                    page,
-                                    email=email,
-                                    password=password,
-                                    behavior=behavior,
+                                return ProviderResult(
+                                    source=source,
+                                    refs=[],
+                                    errors=[
+                                        "auth_missing_credentials",
+                                        *([f"capture:{artifacts[0]}"] if artifacts else []),
+                                    ],
+                                    pages_scraped=0,
+                                    session_saved=False,
                                 )
-                                if not success:
-                                    logger.warning(
-                                        "orchestrator.auth_failed",
-                                        source=source.value,
-                                    )
-                                    return ProviderResult(
-                                        source=source,
-                                        refs=[],
-                                        errors=["auth_failed"],
-                                        pages_scraped=0,
-                                        session_saved=False,
-                                    )
+                            email, password = credentials
+                            success = await provider.authenticate(
+                                page,
+                                email=email,
+                                password=password,
+                                behavior=behavior,
+                            )
+                            if not success:
+                                logger.warning(
+                                    "orchestrator.auth_failed",
+                                    source=source.value,
+                                )
+                                artifacts = await capture.capture_page_failure(
+                                    source=source,
+                                    stage="auth_failed",
+                                    reason="provider_authenticate_returned_false",
+                                    page=page,
+                                )
+                                return ProviderResult(
+                                    source=source,
+                                    refs=[],
+                                    errors=[
+                                        "auth_failed",
+                                        *([f"capture:{artifacts[0]}"] if artifacts else []),
+                                    ],
+                                    pages_scraped=0,
+                                    session_saved=False,
+                                )
+                        else:
+                            logger.info(
+                                "orchestrator.already_authenticated",
+                                source=source.value,
+                            )
 
-                        refs = await provider.run_search(
-                            page,
-                            criteria,
-                            config,
-                            behavior=behavior,
-                            rate_limiter=rate_limiter,
-                            captcha_handler=captcha_handler,
-                        )
-                    except Exception as exc:
-                        logger.exception("orchestrator.provider_failed", source=source.value)
-                        errors = [str(exc)[:300]]
-                    finally:
-                        saved = await session_store.save(source, browser)
-
-                    return ProviderResult(
-                        source=source,
-                        refs=refs,
-                        errors=errors,
-                        pages_scraped=rate_limiter.page_count,
-                        session_saved=saved,
+                    refs = await provider.run_search(
+                        page,
+                        criteria,
+                        config,
+                        behavior=behavior,
+                        rate_limiter=rate_limiter,
+                        captcha_handler=captcha_handler,
+                        capture=capture,
                     )
+                except Exception as exc:
+                    logger.exception("orchestrator.provider_failed", source=source.value)
+                    artifacts = await capture.capture_page_failure(
+                        source=source,
+                        stage="provider_exception",
+                        reason="provider_search_raised_exception",
+                        page=page,
+                        error=str(exc),
+                    )
+                    errors = [
+                        f"provider_exception:{exc.__class__.__name__}:{str(exc)[:220]}",
+                        *([f"capture:{artifacts[0]}"] if artifacts else []),
+                    ]
+                finally:
+                    saved = await session_store.save(source, browser)
 
-            except Exception as exc:
-                logger.exception("orchestrator.browser_launch_failed", source=source.value)
                 return ProviderResult(
                     source=source,
-                    refs=[],
-                    errors=[str(exc)[:300]],
-                    pages_scraped=0,
-                    session_saved=False,
+                    refs=refs,
+                    errors=errors,
+                    pages_scraped=rate_limiter.page_count,
+                    session_saved=saved,
                 )
+
+        except Exception as exc:
+            logger.exception("orchestrator.browser_launch_failed", source=source.value)
+            artifacts = capture.capture_metadata_failure(
+                source=source,
+                stage="browser_launch_failed",
+                reason="browser_manager_launch_or_context_failed",
+                error=str(exc),
+            )
+            return ProviderResult(
+                source=source,
+                refs=[],
+                errors=[
+                    f"browser_launch_failed:{exc.__class__.__name__}:{str(exc)[:220]}",
+                    *([f"capture:{artifacts[0]}"] if artifacts else []),
+                ],
+                pages_scraped=0,
+                session_saved=False,
+            )
 
     # ------------------------------------------------------------------
     # HTTP provider runners
@@ -323,6 +461,7 @@ class DiscoveryOrchestrator:
         companies: list[str],
         criteria: SearchCriteria,
         config: DiscoveryConfig,
+        capture: FailureCapture,
     ) -> ProviderResult:
         try:
             refs = await fetch_all_greenhouse_companies(companies, criteria, config)
@@ -335,10 +474,20 @@ class DiscoveryOrchestrator:
             )
         except Exception as exc:
             logger.exception("orchestrator.greenhouse_failed")
+            artifacts = capture.capture_metadata_failure(
+                source=JobSource.GREENHOUSE,
+                stage="http_provider_exception",
+                reason="greenhouse_provider_runner_failed",
+                error=str(exc),
+                extra={"companies": companies},
+            )
             return ProviderResult(
                 source=JobSource.GREENHOUSE,
                 refs=[],
-                errors=[str(exc)[:300]],
+                errors=[
+                    f"http_provider_exception:{exc.__class__.__name__}:{str(exc)[:220]}",
+                    *([f"capture:{artifacts[0]}"] if artifacts else []),
+                ],
                 pages_scraped=0,
                 session_saved=False,
             )
@@ -348,6 +497,7 @@ class DiscoveryOrchestrator:
         companies: list[str],
         criteria: SearchCriteria,
         config: DiscoveryConfig,
+        capture: FailureCapture,
     ) -> ProviderResult:
         try:
             refs = await fetch_all_lever_companies(companies, criteria, config)
@@ -360,10 +510,20 @@ class DiscoveryOrchestrator:
             )
         except Exception as exc:
             logger.exception("orchestrator.lever_failed")
+            artifacts = capture.capture_metadata_failure(
+                source=JobSource.LEVER,
+                stage="http_provider_exception",
+                reason="lever_provider_runner_failed",
+                error=str(exc),
+                extra={"companies": companies},
+            )
             return ProviderResult(
                 source=JobSource.LEVER,
                 refs=[],
-                errors=[str(exc)[:300]],
+                errors=[
+                    f"http_provider_exception:{exc.__class__.__name__}:{str(exc)[:220]}",
+                    *([f"capture:{artifacts[0]}"] if artifacts else []),
+                ],
                 pages_scraped=0,
                 session_saved=False,
             )

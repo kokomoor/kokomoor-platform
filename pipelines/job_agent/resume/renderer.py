@@ -74,6 +74,10 @@ def render_resume_docx(doc: TailoredResumeDocument, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(output_path))
     logger.info("resume_rendered", path=str(output_path))
+
+    preview_path = output_path.with_suffix(".md")
+    _render_markdown_preview(doc, preview_path)
+
     return output_path
 
 
@@ -339,3 +343,68 @@ def _render_additional_info(document: Any, doc: TailoredResumeDocument) -> None:
 
     for item in doc.additional_info:
         _add_bullet_para(document, item)
+
+
+# -- markdown preview ------------------------------------------------------
+
+
+def _render_markdown_preview(doc: TailoredResumeDocument, path: Path) -> None:
+    """Write a Markdown preview of the tailored resume alongside the .docx."""
+    lines: list[str] = []
+
+    contact = " | ".join(p for p in [doc.location, doc.phone, doc.email, doc.linkedin] if p)
+    lines.append(f"# {doc.name}")
+    if contact:
+        lines.append(f"_{contact}_")
+    lines.append("")
+
+    if doc.education:
+        lines.append("## EDUCATION")
+        lines.append("")
+        for edu in doc.education:
+            header = f"**{edu.school}**"
+            if edu.location:
+                header += f" — {edu.location}"
+            lines.append(header)
+            degree_line = f"_{edu.degree}_"
+            if edu.graduation:
+                degree_line += f" ({edu.graduation})"
+            lines.append(degree_line)
+            for bullet in edu.bullets:
+                lines.append(f"- {bullet.text}")
+            lines.append("")
+
+    if doc.experience:
+        lines.append("## EXPERIENCE")
+        lines.append("")
+        for exp in doc.experience:
+            header = f"**{exp.company}**"
+            if exp.location:
+                header += f" — {exp.location}"
+            lines.append(header)
+            title_line = f"**_{exp.title}_**"
+            if exp.dates:
+                title_line += f" | {exp.dates}"
+            lines.append(title_line)
+            for bullet in exp.bullets:
+                lines.append(f"- {bullet.text}")
+            lines.append("")
+
+    if doc.skills_highlight:
+        lines.append("## TECHNICAL SKILLS")
+        lines.append("")
+        lines.append(f"- {', '.join(doc.skills_highlight)}")
+        lines.append("")
+
+    if doc.additional_info or doc.clearance:
+        lines.append("## ADDITIONAL INFORMATION")
+        lines.append("")
+        for item in doc.additional_info:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    try:
+        path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("resume_preview_rendered", path=str(path))
+    except Exception:
+        logger.warning("resume_preview_failed", path=str(path), exc_info=True)

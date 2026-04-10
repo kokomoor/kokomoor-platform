@@ -28,12 +28,26 @@ if TYPE_CHECKING:
     from playwright.async_api import ElementHandle, Page
 
     from pipelines.job_agent.discovery.captcha import CaptchaHandler
+    from pipelines.job_agent.discovery.debug_capture import FailureCapture
     from pipelines.job_agent.discovery.human_behavior import HumanBehavior
     from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef
     from pipelines.job_agent.discovery.rate_limiter import DomainRateLimiter
     from pipelines.job_agent.models import JobSource, SearchCriteria
 
 logger = structlog.get_logger(__name__)
+
+_NAV_RETRY_LIMIT = 1
+_ERROR_TITLE_SIGNALS = frozenset(
+    {
+        "page not found",
+        "error",
+        "access denied",
+        "403 forbidden",
+        "502 bad gateway",
+        "503 service",
+        "blocked",
+    }
+)
 
 
 class BaseProvider(ABC):
@@ -77,6 +91,95 @@ class BaseProvider(ABC):
         return None
 
     # ------------------------------------------------------------------
+    # Navigation guard
+    # ------------------------------------------------------------------
+
+    async def _safe_navigate(
+        self,
+        page: Page,
+        url: str,
+        *,
+        rate_limiter: DomainRateLimiter,
+        captcha_handler: CaptchaHandler,
+        config: DiscoveryConfig,
+        capture: FailureCapture | None = None,
+    ) -> bool:
+        """Navigate to a URL with retry, validation, and captcha detection.
+
+        Returns True if the page is ready for extraction.
+        """
+        for attempt in range(_NAV_RETRY_LIMIT + 1):
+            try:
+                await rate_limiter.wait()
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            except Exception:
+                logger.warning(
+                    "navigation_failed",
+                    url=url,
+                    attempt=attempt + 1,
+                    exc_info=True,
+                )
+                if attempt < _NAV_RETRY_LIMIT:
+                    continue
+                if capture:
+                    await capture.capture_page_failure(
+                        source=self.source,
+                        stage="navigation_exhausted",
+                        reason=f"all_navigation_attempts_failed_for_{url[:80]}",
+                        page=page,
+                    )
+                return False
+
+            if self._is_error_page(page):
+                logger.warning(
+                    "navigation_error_page",
+                    url=url,
+                    actual_url=page.url,
+                    attempt=attempt + 1,
+                )
+                if attempt < _NAV_RETRY_LIMIT:
+                    continue
+                if capture:
+                    await capture.capture_page_failure(
+                        source=self.source,
+                        stage="error_page_detected",
+                        reason="navigation_landed_on_error_page",
+                        page=page,
+                    )
+                return False
+
+            captcha = await captcha_handler.detect(page)
+            if captcha.detected:
+                outcome = await captcha_handler.handle(
+                    page,
+                    captcha,
+                    strategy=config.captcha_strategy,
+                    api_key=config.captcha_api_key.get_secret_value(),
+                )
+                if not outcome.resolved:
+                    logger.warning("captcha_blocked", url=url)
+                    if capture:
+                        await capture.capture_page_failure(
+                            source=self.source,
+                            stage="captcha_blocked",
+                            reason=f"captcha_{captcha.captcha_type}_not_resolved",
+                            page=page,
+                        )
+                    return False
+
+            return True
+
+        return False
+
+    @staticmethod
+    def _is_error_page(page: Page) -> bool:
+        """Quick heuristic: did we land on an error or block page?"""
+        url_lower = page.url.lower()
+        return any(
+            sig in url_lower for sig in ("/error", "/404", "/403", "/blocked", "/unavailable")
+        )
+
+    # ------------------------------------------------------------------
     # Pagination loop
     # ------------------------------------------------------------------
 
@@ -89,6 +192,7 @@ class BaseProvider(ABC):
         behavior: HumanBehavior,
         rate_limiter: DomainRateLimiter,
         captcha_handler: CaptchaHandler,
+        capture: FailureCapture | None = None,
     ) -> list[ListingRef]:
         """Drive search across all keyword/location URLs with pagination."""
         refs: list[ListingRef] = []
@@ -102,6 +206,7 @@ class BaseProvider(ABC):
                 behavior=behavior,
                 rate_limiter=rate_limiter,
                 captcha_handler=captcha_handler,
+                capture=capture,
             )
             refs.extend(page_refs)
             if len(refs) >= config.max_listings_per_provider:
@@ -118,32 +223,35 @@ class BaseProvider(ABC):
         behavior: HumanBehavior,
         rate_limiter: DomainRateLimiter,
         captcha_handler: CaptchaHandler,
+        capture: FailureCapture | None = None,
     ) -> list[ListingRef]:
         """Navigate to a single search URL and paginate through results."""
-        try:
-            await rate_limiter.wait()
-            await page.goto(start_url, wait_until="domcontentloaded", timeout=30_000)
-        except Exception:
-            logger.warning("navigation_failed", url=start_url, exc_info=True)
+        ready = await self._safe_navigate(
+            page,
+            start_url,
+            rate_limiter=rate_limiter,
+            captcha_handler=captcha_handler,
+            config=config,
+            capture=capture,
+        )
+        if not ready:
             return []
-
-        captcha = await captcha_handler.detect(page)
-        if captcha.detected:
-            outcome = await captcha_handler.handle(
-                page,
-                captcha,
-                strategy=config.captcha_strategy,
-                api_key=config.captcha_api_key.get_secret_value(),
-            )
-            if not outcome.resolved:
-                logger.warning("captcha_blocked", url=start_url)
-                return []
 
         await behavior.between_actions_pause(min_s=1.0, max_s=3.0)
         await behavior.simulate_interest_in_page(page)
 
         page_refs = await self._extract_refs_from_page(page)
         refs = list(page_refs)
+
+        if not refs and capture:
+            await capture.capture_page_failure(
+                source=self.source,
+                stage="zero_results_first_page",
+                reason="extraction_returned_zero_refs_on_first_page",
+                page=page,
+                extra={"url": start_url},
+            )
+
         page_count = 1
 
         for _ in range(config.max_pages_per_search - 1):
@@ -157,7 +265,6 @@ class BaseProvider(ABC):
             if not next_btn or not await next_btn.is_visible():
                 break
 
-            # Delay BEFORE the next navigation-triggering interaction.
             await rate_limiter.wait()
             await behavior.between_pages_pause(self.source)
             await behavior.human_click(page, next_btn)

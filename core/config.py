@@ -292,6 +292,18 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum rule-based fit score to include listing. 0.0 = accept everything.",
     )
+    discovery_debug_capture_enabled: bool = Field(
+        default=False,
+        description="Capture screenshots/HTML/metadata for discovery failures.",
+    )
+    discovery_debug_capture_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "debug_captures"),
+        description="Directory for discovery failure-capture artifacts.",
+    )
+    discovery_debug_capture_html: bool = Field(
+        default=True,
+        description="Include HTML snapshots in discovery failure captures.",
+    )
 
     # Provider enable flags
     discovery_linkedin_enabled: bool = Field(default=True)

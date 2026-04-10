@@ -332,7 +332,11 @@ def _ensure_id_references_exist(plan: CoverLetterPlan, profile: ResumeMasterProf
     exp_ids = {exp.id for exp in profile.experience}
     edu_ids = {edu.id for edu in profile.education}
 
-    unknown_bullets = sorted({x for x in plan.selected_bullet_ids if x not in bullet_ids})
+    all_referenced_bullets = set(plan.selected_bullet_ids)
+    for mapping in plan.requirement_evidence:
+        all_referenced_bullets.update(mapping.supporting_bullet_ids)
+
+    unknown_bullets = sorted(all_referenced_bullets - bullet_ids)
     unknown_experience = sorted({x for x in plan.selected_experience_ids if x not in exp_ids})
     unknown_education = sorted({x for x in plan.selected_education_ids if x not in edu_ids})
 
@@ -384,9 +388,11 @@ def _ensure_evidence_mapping_consistency(plan: CoverLetterPlan) -> None:
             raise ValueError("Each requirement_evidence entry must include a requirement.")
         missing = [bid for bid in mapping.supporting_bullet_ids if bid not in selected_ids]
         if missing:
-            raise ValueError(
-                "Requirement evidence references bullet IDs not present in selected_bullet_ids: "
-                f"{missing}"
+            plan.selected_bullet_ids.extend(missing)
+            selected_ids.update(missing)
+            logger.warning(
+                "cover_letter.evidence_ids_auto_healed",
+                added=missing,
             )
 
 

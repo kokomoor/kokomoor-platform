@@ -138,6 +138,9 @@ class TestDiscoveryConfigFromSettings:
         mock_settings.discovery_max_listings_per_provider = 100
         mock_settings.discovery_session_max_age_hours = 48
         mock_settings.discovery_prefilter_min_score = 0.3
+        mock_settings.discovery_debug_capture_enabled = True
+        mock_settings.discovery_debug_capture_dir = "data/debug_captures"
+        mock_settings.discovery_debug_capture_html = True
         mock_settings.discovery_linkedin_enabled = True
         mock_settings.discovery_indeed_enabled = False
         mock_settings.discovery_builtin_enabled = True
@@ -159,6 +162,9 @@ class TestDiscoveryConfigFromSettings:
         assert config.max_pages_per_search == 5
         assert config.max_listings_per_provider == 100
         assert config.prefilter_min_score == 0.3
+        assert config.debug_capture_enabled is True
+        assert config.debug_capture_dir == "data/debug_captures"
+        assert config.debug_capture_html is True
         assert config.indeed_enabled is False
         assert config.greenhouse_companies == ["acme", "widgets"]
         assert config.lever_companies == ["openai"]

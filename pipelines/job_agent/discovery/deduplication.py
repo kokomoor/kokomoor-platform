@@ -1,10 +1,13 @@
 """Deduplication for discovered listing refs.
 
-Two phases:
+Three phases:
 1. In-run: a set of dedup_keys already seen this run (passed in, mutated in place).
 2. Database: bulk SELECT against job_listings table to skip already-tracked listings.
+3. File fallback: if the DB check fails (e.g. no migrations), use a file-based
+   dedup store so cross-run dedup still works without database setup.
 
-Order matters: in-run dedup happens first (cheap), DB check second (one query per batch).
+Order matters: in-run dedup happens first (cheap), DB check second, file
+fallback third.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import hashlib
 from typing import TYPE_CHECKING
 
 import structlog
+
+from pipelines.job_agent.discovery.dedup_store import FileDedup
 
 if TYPE_CHECKING:
     from pipelines.job_agent.discovery.models import ListingRef
@@ -46,6 +51,7 @@ async def deduplicate_refs(
     after_in_run = len(phase1)
 
     # Phase 2: database dedup
+    db_ok = False
     if check_db and phase1:
         try:
             from sqlmodel import col, select
@@ -61,6 +67,7 @@ async def deduplicate_refs(
                 existing_keys: set[str] = set(result.scalars().all())
 
             phase1 = [(k, r) for k, r in phase1 if k not in existing_keys]
+            db_ok = True
         except Exception as exc:
             logger.warning(
                 "dedup_db_unavailable",
@@ -69,8 +76,25 @@ async def deduplicate_refs(
                 error=str(exc)[:200],
             )
 
+    # Phase 3: file-based fallback when DB is unavailable
+    file_dedup = FileDedup()
+    if not db_ok and phase1:
+        file_existing = file_dedup.contains_batch([k for k, _ in phase1])
+        if file_existing:
+            logger.info(
+                "dedup_file_removed",
+                removed=len(file_existing),
+            )
+            phase1 = [(k, r) for k, r in phase1 if k not in file_existing]
+
     after_db = len(phase1)
     final = [ref for _, ref in phase1]
+
+    # Persist new keys to the file store for future runs.
+    new_keys = [k for k, _ in phase1]
+    if new_keys:
+        file_dedup.add_batch(new_keys)
+        file_dedup.save()
 
     logger.info(
         "dedup_complete",
@@ -78,5 +102,6 @@ async def deduplicate_refs(
         after_in_run=after_in_run,
         after_db=after_db,
         final=len(final),
+        file_store_size=file_dedup.size,
     )
     return final

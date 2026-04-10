@@ -6,7 +6,12 @@ Pure Python — no external dependencies, no mock browser, no DB.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from pipelines.job_agent.discovery.deduplication import (
     compute_dedup_key,
@@ -30,16 +35,16 @@ from pipelines.job_agent.models import JobSource, SearchCriteria
 
 class TestCanonicalizeUrl:
     def test_linkedin_strips_tracking(self) -> None:
-        url = "https://www.linkedin.com/jobs/view/12345/?utm_source=google&trk=abc"
-        assert canonicalize_url(url) == "https://www.linkedin.com/jobs/view/12345/"
+        url = "https://www.linkedin.com/jobs/view/1234567/?utm_source=google&trk=abc"
+        assert canonicalize_url(url) == "https://www.linkedin.com/jobs/view/1234567/"
 
     def test_linkedin_normalizes_path(self) -> None:
-        url = "https://www.linkedin.com/jobs/12345/?ref=share"
-        assert canonicalize_url(url) == "https://www.linkedin.com/jobs/view/12345/"
+        url = "https://www.linkedin.com/jobs/1234567/?ref=share"
+        assert canonicalize_url(url) == "https://www.linkedin.com/jobs/view/1234567/"
 
     def test_linkedin_query_param_id(self) -> None:
-        url = "https://www.linkedin.com/jobs/search/?currentJobId=67890&keywords=TPM"
-        assert canonicalize_url(url) == "https://www.linkedin.com/jobs/view/67890/"
+        url = "https://www.linkedin.com/jobs/search/?currentJobId=6789012&keywords=TPM"
+        assert canonicalize_url(url) == "https://www.linkedin.com/jobs/view/6789012/"
 
     def test_indeed_keeps_jk_only(self) -> None:
         url = "https://www.indeed.com/viewjob?jk=abc123&utm_source=google&from=serp"
@@ -72,17 +77,25 @@ class TestCanonicalizeUrl:
 
 class TestExtractLinkedInJobId:
     def test_view_pattern(self) -> None:
-        assert extract_job_id_from_linkedin_url("/jobs/view/12345/") == "12345"
+        assert extract_job_id_from_linkedin_url("/jobs/view/1234567/") == "1234567"
 
     def test_short_pattern(self) -> None:
-        assert extract_job_id_from_linkedin_url("/jobs/99999/?trk=x") == "99999"
+        assert extract_job_id_from_linkedin_url("/jobs/9999999/?trk=x") == "9999999"
 
     def test_query_param(self) -> None:
-        url = "/jobs/search/?currentJobId=77777"
-        assert extract_job_id_from_linkedin_url(url) == "77777"
+        url = "/jobs/search/?currentJobId=7777777"
+        assert extract_job_id_from_linkedin_url(url) == "7777777"
 
     def test_no_match(self) -> None:
         assert extract_job_id_from_linkedin_url("/company/acme/") is None
+
+    def test_guest_page_slug_url(self) -> None:
+        url = "/jobs/view/software-engineer-backend-at-tinder-4328991043?position=2"
+        assert extract_job_id_from_linkedin_url(url) == "4328991043"
+
+    def test_guest_page_slug_with_company(self) -> None:
+        url = "/jobs/view/senior-swe-at-google-4374834620?position=1&pageNum=0"
+        assert extract_job_id_from_linkedin_url(url) == "4374834620"
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +162,11 @@ class TestComputeDedupKey:
 
 class TestDeduplicateRefs:
     @pytest.mark.asyncio
-    async def test_removes_in_run_duplicates(self) -> None:
+    async def test_removes_in_run_duplicates(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from pipelines.job_agent.discovery.dedup_store import FileDedup
+
         ref = ListingRef(
             url="https://example.com/1",
             title="TPM",
@@ -157,11 +174,19 @@ class TestDeduplicateRefs:
             source=JobSource.LINKEDIN,
         )
         seen: set[str] = set()
-        result = await deduplicate_refs([ref, ref], in_run_seen=seen, check_db=False)
+        with patch(
+            "pipelines.job_agent.discovery.deduplication.FileDedup",
+            return_value=FileDedup(tmp_path / "d.json"),
+        ):
+            result = await deduplicate_refs([ref, ref], in_run_seen=seen, check_db=False)
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_mutates_seen_set(self) -> None:
+    async def test_mutates_seen_set(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from pipelines.job_agent.discovery.dedup_store import FileDedup
+
         ref = ListingRef(
             url="https://example.com/1",
             title="TPM",
@@ -169,11 +194,19 @@ class TestDeduplicateRefs:
             source=JobSource.LINKEDIN,
         )
         seen: set[str] = set()
-        await deduplicate_refs([ref], in_run_seen=seen, check_db=False)
+        with patch(
+            "pipelines.job_agent.discovery.deduplication.FileDedup",
+            return_value=FileDedup(tmp_path / "d.json"),
+        ):
+            await deduplicate_refs([ref], in_run_seen=seen, check_db=False)
         assert len(seen) == 1
 
     @pytest.mark.asyncio
-    async def test_pre_seen_keys_excluded(self) -> None:
+    async def test_pre_seen_keys_excluded(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from pipelines.job_agent.discovery.dedup_store import FileDedup
+
         ref = ListingRef(
             url="https://example.com/1",
             title="TPM",
@@ -182,11 +215,19 @@ class TestDeduplicateRefs:
         )
         key = compute_dedup_key("Acme", "TPM", "https://example.com/1")
         seen: set[str] = {key}
-        result = await deduplicate_refs([ref], in_run_seen=seen, check_db=False)
+        with patch(
+            "pipelines.job_agent.discovery.deduplication.FileDedup",
+            return_value=FileDedup(tmp_path / "d.json"),
+        ):
+            result = await deduplicate_refs([ref], in_run_seen=seen, check_db=False)
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_distinct_refs_pass(self) -> None:
+    async def test_distinct_refs_pass(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from pipelines.job_agent.discovery.dedup_store import FileDedup
+
         ref_a = ListingRef(
             url="https://example.com/a",
             title="PM",
@@ -200,7 +241,11 @@ class TestDeduplicateRefs:
             source=JobSource.INDEED,
         )
         seen: set[str] = set()
-        result = await deduplicate_refs([ref_a, ref_b], in_run_seen=seen, check_db=False)
+        with patch(
+            "pipelines.job_agent.discovery.deduplication.FileDedup",
+            return_value=FileDedup(tmp_path / "d.json"),
+        ):
+            result = await deduplicate_refs([ref_a, ref_b], in_run_seen=seen, check_db=False)
         assert len(result) == 2
 
 

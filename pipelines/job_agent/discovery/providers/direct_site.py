@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
     from pipelines.job_agent.discovery.captcha import CaptchaHandler
+    from pipelines.job_agent.discovery.debug_capture import FailureCapture
     from pipelines.job_agent.discovery.human_behavior import HumanBehavior
     from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef
     from pipelines.job_agent.discovery.rate_limiter import DomainRateLimiter
@@ -242,6 +243,7 @@ class DirectSiteProvider(BaseProvider):
         behavior: HumanBehavior,
         rate_limiter: DomainRateLimiter,
         captcha_handler: CaptchaHandler,
+        capture: FailureCapture | None = None,
     ) -> list[ListingRef]:
         """Iterate over configured direct sites and aggregate results."""
         if not config.direct_site_configs:

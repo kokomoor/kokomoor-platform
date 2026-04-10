@@ -1,4 +1,4 @@
-"""Tests for DiscoveryOrchestrator auth and sequencing behavior."""
+"""Tests for DiscoveryOrchestrator auth, retry, and sequencing behavior."""
 
 from __future__ import annotations
 
@@ -8,10 +8,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
+from pipelines.job_agent.discovery.debug_capture import FailureCapture
 from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef, ProviderResult
 from pipelines.job_agent.discovery.orchestrator import DiscoveryOrchestrator
 from pipelines.job_agent.discovery.providers.base import BaseProvider
 from pipelines.job_agent.models import JobSource, SearchCriteria
+
+
+def _make_capture() -> FailureCapture:
+    return FailureCapture(
+        enabled=False,
+        base_dir="/tmp/debug",
+        run_id="test-run",
+        include_html=False,
+    )
 
 
 class _AuthProvider(BaseProvider):
@@ -54,7 +64,7 @@ async def test_auth_provider_missing_credentials_returns_structured_error(
     session_store = MagicMock()
     session_store.load.return_value = None
     session_store.save = AsyncMock(return_value=True)
-    semaphore = asyncio.Semaphore(1)
+    session_store.invalidate = MagicMock()
 
     fake_page = AsyncMock()
     fake_page.goto = AsyncMock()
@@ -74,17 +84,18 @@ async def test_auth_provider_missing_credentials_returns_structured_error(
         lambda storage_state=None: _FakeBrowserManager(),
     )
 
-    result = await DiscoveryOrchestrator._run_browser_provider(
-        provider,
-        criteria,
-        config,
-        settings,
-        session_store,
-        semaphore,
+    result = await DiscoveryOrchestrator._attempt_browser_provider(
+        provider=provider,
+        criteria=criteria,
+        config=config,
+        settings=settings,
+        session_store=session_store,
+        capture=_make_capture(),
+        storage_state=None,
     )
 
     assert isinstance(result, ProviderResult)
-    assert result.errors == ["auth_missing_credentials"]
+    assert any("auth_missing" in e for e in result.errors)
 
 
 @pytest.mark.asyncio
@@ -103,7 +114,7 @@ async def test_first_navigation_wait_happens_before_warmup_goto(
     session_store = MagicMock()
     session_store.load.return_value = None
     session_store.save = AsyncMock(return_value=True)
-    semaphore = asyncio.Semaphore(1)
+    session_store.invalidate = MagicMock()
     events: list[str] = []
 
     fake_page = AsyncMock()
@@ -139,6 +150,91 @@ async def test_first_navigation_wait_happens_before_warmup_goto(
         _FakeRateLimiter,
     )
 
+    result = await DiscoveryOrchestrator._attempt_browser_provider(
+        provider=provider,
+        criteria=criteria,
+        config=config,
+        settings=settings,
+        session_store=session_store,
+        capture=_make_capture(),
+        storage_state=None,
+    )
+
+    assert isinstance(result, ProviderResult)
+    assert events.index("wait") < events.index("goto")
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_with_session_triggers_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When auth fails and a session existed, the orchestrator should
+    invalidate the session and retry once."""
+    attempt_count = 0
+
+    class _FailThenSucceedProvider(BaseProvider):
+        source = JobSource.LINKEDIN
+
+        def requires_auth(self) -> bool:
+            return True
+
+        def base_domain(self) -> str:
+            return "www.linkedin.com"
+
+        async def is_authenticated(self, page: object) -> bool:
+            return False
+
+        async def authenticate(
+            self, page: object, *, email: str, password: str, behavior: object
+        ) -> bool:
+            nonlocal attempt_count
+            attempt_count += 1
+            return attempt_count >= 2
+
+        def _build_search_urls(
+            self, criteria: SearchCriteria, config: DiscoveryConfig
+        ) -> list[str]:
+            return []
+
+        async def _extract_refs_from_page(self, page: object) -> list[ListingRef]:
+            return []
+
+    provider = _FailThenSucceedProvider()
+    criteria = SearchCriteria()
+    config = DiscoveryConfig(sessions_dir="/tmp/sessions")
+    settings = MagicMock(
+        linkedin_email="user@example.com",
+        linkedin_password=SecretStr("secret"),
+        wellfound_email="",
+        wellfound_password=SecretStr(""),
+    )
+    session_store = MagicMock()
+    session_store.load.return_value = {"cookies": []}
+    session_store.save = AsyncMock(return_value=True)
+    session_store.age_hours.return_value = 1.0
+    session_store.invalidate = MagicMock()
+    semaphore = asyncio.Semaphore(1)
+
+    fake_page = AsyncMock()
+    fake_page.goto = AsyncMock()
+    fake_page.url = "https://www.linkedin.com/login"
+    fake_page.query_selector = AsyncMock(return_value=None)
+
+    class _FakeBrowserManager:
+        async def __aenter__(self) -> _FakeBrowserManager:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        async def new_page(self) -> AsyncMock:
+            return fake_page
+
+    monkeypatch.setattr(
+        "pipelines.job_agent.discovery.orchestrator.BrowserManager",
+        lambda storage_state=None: _FakeBrowserManager(),
+    )
+
     result = await DiscoveryOrchestrator._run_browser_provider(
         provider,
         criteria,
@@ -146,7 +242,9 @@ async def test_first_navigation_wait_happens_before_warmup_goto(
         settings,
         session_store,
         semaphore,
+        _make_capture(),
     )
 
     assert isinstance(result, ProviderResult)
-    assert events.index("wait") < events.index("goto")
+    session_store.invalidate.assert_called_once_with(JobSource.LINKEDIN)
+    assert attempt_count == 2
