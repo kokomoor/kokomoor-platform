@@ -27,9 +27,9 @@ if TYPE_CHECKING:
 
     from playwright.async_api import ElementHandle, Page
 
-    from pipelines.job_agent.discovery.captcha import CaptchaHandler
-    from pipelines.job_agent.discovery.debug_capture import FailureCapture
-    from pipelines.job_agent.discovery.human_behavior import HumanBehavior
+    from core.browser.captcha import CaptchaHandler
+    from core.browser.debug_capture import FailureCapture
+    from core.browser.human_behavior import HumanBehavior
     from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef
     from pipelines.job_agent.discovery.rate_limiter import DomainRateLimiter
     from pipelines.job_agent.models import JobSource, SearchCriteria
@@ -266,7 +266,7 @@ class BaseProvider(ABC):
                 break
 
             await rate_limiter.wait()
-            await behavior.between_pages_pause(self.source)
+            await behavior.between_navigations_pause()
             await behavior.human_click(page, next_btn)
 
             captcha = await captcha_handler.detect(page)

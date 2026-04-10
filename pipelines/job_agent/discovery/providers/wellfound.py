@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from playwright.async_api import Page
 
-    from pipelines.job_agent.discovery.human_behavior import HumanBehavior
+    from core.browser.human_behavior import HumanBehavior
     from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef
     from pipelines.job_agent.models import SearchCriteria
 

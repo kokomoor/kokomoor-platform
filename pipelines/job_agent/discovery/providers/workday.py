@@ -36,9 +36,9 @@ if TYPE_CHECKING:
 
     from playwright.async_api import ElementHandle, Page
 
-    from pipelines.job_agent.discovery.captcha import CaptchaHandler
-    from pipelines.job_agent.discovery.debug_capture import FailureCapture
-    from pipelines.job_agent.discovery.human_behavior import HumanBehavior
+    from core.browser.captcha import CaptchaHandler
+    from core.browser.debug_capture import FailureCapture
+    from core.browser.human_behavior import HumanBehavior
     from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef
     from pipelines.job_agent.discovery.rate_limiter import DomainRateLimiter
     from pipelines.job_agent.models import SearchCriteria
@@ -283,7 +283,7 @@ class WorkdayProvider(BaseProvider):
 
             # Delay BEFORE pagination interaction to avoid instant next request.
             await rate_limiter.wait()
-            await behavior.between_pages_pause(self.source)
+            await behavior.between_navigations_pause()
             await behavior.human_click(page, load_more)
             await asyncio.sleep(2.0)
             await behavior.simulate_interest_in_page(page)

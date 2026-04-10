@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from pipelines.job_agent.discovery.session import SessionStore
+from core.browser.session import SessionStore
 from pipelines.job_agent.models import JobSource
 
 

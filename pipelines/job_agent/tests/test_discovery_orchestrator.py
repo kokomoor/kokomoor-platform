@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
-from pipelines.job_agent.discovery.debug_capture import FailureCapture
+from core.browser.debug_capture import FailureCapture
 from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef, ProviderResult
 from pipelines.job_agent.discovery.orchestrator import DiscoveryOrchestrator
 from pipelines.job_agent.discovery.providers.base import BaseProvider

@@ -1,11 +1,21 @@
-"""Playwright browser lifecycle management.
+"""Playwright browser lifecycle management and shared browser infrastructure.
 
 Provides a managed async browser context with anti-detection defaults,
 rate limiting, and proper resource cleanup. All pipelines that need
 web interaction share this abstraction.
 
+Also re-exports shared browser automation utilities (human simulation,
+CAPTCHA handling, session persistence, rate limiting, failure capture)
+that were promoted from ``pipelines.job_agent.discovery`` to live here
+as domain-agnostic core infrastructure.
+
 Usage:
     from core.browser import BrowserManager
+    from core.browser.human_behavior import HumanBehavior
+    from core.browser.captcha import CaptchaHandler
+    from core.browser.session import SessionStore
+    from core.browser.rate_limiter import RateLimiter, RateLimitProfile
+    from core.browser.debug_capture import FailureCapture
 
     async with BrowserManager() as browser:
         page = await browser.new_page()

@@ -29,9 +29,9 @@ from typing import TYPE_CHECKING
 import structlog
 
 from core.browser import BrowserManager
-from pipelines.job_agent.discovery.captcha import CaptchaHandler
-from pipelines.job_agent.discovery.debug_capture import FailureCapture
-from pipelines.job_agent.discovery.human_behavior import HumanBehavior
+from core.browser.captcha import CaptchaHandler
+from core.browser.debug_capture import FailureCapture
+from core.browser.human_behavior import HumanBehavior
 from pipelines.job_agent.discovery.models import ProviderResult
 from pipelines.job_agent.discovery.providers.builtin import BuiltInProvider
 from pipelines.job_agent.discovery.providers.direct_site import DirectSiteProvider
@@ -43,8 +43,8 @@ from pipelines.job_agent.discovery.providers.lever import fetch_all_lever_compan
 from pipelines.job_agent.discovery.providers.linkedin import LinkedInProvider
 from pipelines.job_agent.discovery.providers.wellfound import WellfoundProvider
 from pipelines.job_agent.discovery.providers.workday import WorkdayProvider
+from core.browser.session import SessionStore
 from pipelines.job_agent.discovery.rate_limiter import DomainRateLimiter
-from pipelines.job_agent.discovery.session import SessionStore
 from pipelines.job_agent.models import JobSource
 
 if TYPE_CHECKING:

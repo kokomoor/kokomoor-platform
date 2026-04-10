@@ -1,6 +1,8 @@
 # AGENTS.md — core/browser/
 
-Playwright lifecycle management, anti-detection, and session persistence.
+Playwright lifecycle management, anti-detection, session persistence, and shared
+browser automation infrastructure (human simulation, CAPTCHA handling, rate
+limiting, failure capture).
 
 ## Stealth stack
 
@@ -35,6 +37,22 @@ async with BrowserManager(storage_state=state) as browser:
 - Pass `None` (the default) to start a fresh session — the kwarg is omitted from `new_context()` entirely.
 - `dump_storage_state()` returns the current context's full storage snapshot. Call it before exiting the context manager.
 - **Intended pattern:** dump after each provider run, persist to disk or DB, restore on next run via the `storage_state=` param.
+
+## Shared browser infrastructure
+
+These modules were promoted from `pipelines/job_agent/discovery/` to be
+reusable across all pipelines. They are domain-agnostic — pipeline-specific
+config (e.g. per-provider rate limit profiles) stays in the pipeline.
+
+| Module | Class | Purpose |
+|--------|-------|---------|
+| `human_behavior.py` | `HumanBehavior` | Realistic mouse movement, typing, scrolling, pausing |
+| `captcha.py` | `CaptchaHandler` | CAPTCHA detection + tiered response (wait, skip, solve) |
+| `debug_capture.py` | `FailureCapture` | Save metadata/screenshot/HTML on failures |
+| `session.py` | `SessionStore` | Persist/restore Playwright storage_state per source |
+| `rate_limiter.py` | `RateLimiter`, `RateLimitProfile` | Configurable delays with periodic long pauses |
+| `actions.py` | `BrowserActions` | Stealth-wrapped atomic browser operations |
+| `observer.py` | `PageObserver` | Structured page-state extraction for LLM consumption |
 
 ## Rules
 

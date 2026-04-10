@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from pipelines.job_agent.discovery.captcha import CaptchaDetection, CaptchaOutcome
+from core.browser.captcha import CaptchaDetection, CaptchaOutcome
 from pipelines.job_agent.discovery.models import DiscoveryConfig, ListingRef
 from pipelines.job_agent.discovery.providers.base import BaseProvider
 from pipelines.job_agent.models import JobSource, SearchCriteria

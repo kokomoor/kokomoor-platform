@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pipelines.job_agent.discovery.debug_capture import FailureCapture
+from core.browser.debug_capture import FailureCapture
 from pipelines.job_agent.models import JobSource
 
 
