@@ -20,7 +20,10 @@ tone_version must be one of:
 company_motivation must contain at least 10 words of specific reasoning about WHY this company, not just that you want to work there. Reference what the company does, builds, or stands for. This reasoning must also appear in the letter body.
 
 Hard requirements:
-1) Reference selected evidence IDs in selected_experience_ids, selected_education_ids, and selected_bullet_ids.
+1) Reference selected evidence IDs correctly:
+   - selected_experience_ids: top-level experience entry IDs (e.g. "exp_acme_swe") — NOT bullet IDs.
+   - selected_education_ids: top-level education entry IDs (e.g. "edu_mit_sloan") — NOT the indented bullet IDs under that entry.
+   - selected_bullet_ids: all specific evidence bullets you cite, from any section (experience bullets AND education bullets like "edu_mit_genai"). If an education bullet appears in the inventory, it belongs here, not in selected_education_ids. This list must include every bullet ID that appears in any requirement_evidence entry.
 2) Every selected ID must exist in the inventory.
 3) Cover letter structure must be: salutation, opening paragraph, body paragraph(s), closing paragraph, signoff.
 4) No placeholders like [Company], [Hiring Manager], TBD, or {{variable}}.

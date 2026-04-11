@@ -382,18 +382,22 @@ def _ensure_evidence_mapping_consistency(plan: CoverLetterPlan) -> None:
     if not plan.requirement_evidence:
         raise ValueError("Cover letter must include requirement_evidence mapping.")
 
-    selected_ids = set(plan.selected_bullet_ids)
     for mapping in plan.requirement_evidence:
         if not mapping.requirement:
             raise ValueError("Each requirement_evidence entry must include a requirement.")
-        missing = [bid for bid in mapping.supporting_bullet_ids if bid not in selected_ids]
-        if missing:
-            plan.selected_bullet_ids.extend(missing)
-            selected_ids.update(missing)
-            logger.warning(
-                "cover_letter.evidence_ids_auto_healed",
-                added=missing,
-            )
+
+    # selected_bullet_ids is derived: it is the union of all supporting_bullet_ids
+    # across all requirement_evidence entries, plus any explicitly listed IDs.
+    # This eliminates the failure mode where the model populates requirement_evidence
+    # correctly but forgets to mirror the same IDs into the flat list.
+    all_evidence_ids = {
+        bid
+        for mapping in plan.requirement_evidence
+        for bid in mapping.supporting_bullet_ids
+    }
+    existing = set(plan.selected_bullet_ids)
+    merged = list(plan.selected_bullet_ids) + sorted(all_evidence_ids - existing)
+    plan.selected_bullet_ids[:] = list(dict.fromkeys(merged))  # stable dedup
 
 
 def _ensure_no_banned_phrases(
