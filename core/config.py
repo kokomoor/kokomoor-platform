@@ -245,13 +245,25 @@ class Settings(BaseSettings):
 
     # --- Tailoring Cost Control ---
     tailoring_max_listings: int = Field(
-        default=0,
+        default=5,
         ge=0,
         description=(
             "Max listings to send through resume + cover-letter tailoring per run. "
-            "0 = no cap (tailor all qualified). "
-            "When set, the ranking node selects the top-N by salary (salary_max desc) "
-            "and marks the rest SKIPPED. Discovery and job analysis still run on all listings."
+            "0 = no cap. The ranking node selects the top-N by fit score (see "
+            "``ranking_min_fit_score``) and marks the rest SKIPPED. Discovery and "
+            "job analysis still run on all listings so a future ranker has full data."
+        ),
+    )
+    ranking_min_fit_score: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum profile-coverage fit score required to reach tailoring. "
+            "Listings below this floor are marked SKIPPED even if they fit under "
+            "``tailoring_max_listings``. Raise this to be stricter about what "
+            "consumes expensive Sonnet cover-letter tokens; lower it in exploratory "
+            "runs where you still want to see weak matches."
         ),
     )
 
@@ -333,10 +345,15 @@ class Settings(BaseSettings):
 
     # Pre-filter
     discovery_prefilter_min_score: float = Field(
-        default=0.0,
+        default=0.25,
         ge=0.0,
         le=1.0,
-        description="Minimum rule-based fit score to include listing. 0.0 = accept everything.",
+        description=(
+            "Minimum rule-based fit score for a raw discovery ref to survive "
+            "into bulk_extraction + job_analysis. 0.0 disables the gate and "
+            "sends every ref through the expensive chain; 0.25 (default) drops "
+            "listings with no role, keyword, company, or location match at all."
+        ),
     )
     discovery_debug_capture_enabled: bool = Field(
         default=False,
