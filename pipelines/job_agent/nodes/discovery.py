@@ -53,11 +53,32 @@ async def discovery_node(state: JobAgentState) -> JobAgentState:
                 }
             )
 
+    raw_by_source = _count_by_source(refs)
+
     refs = await deduplicate_refs(refs, in_run_seen=in_run_seen, check_db=True)
+    deduped_by_source = _count_by_source(refs)
 
     passed, rejected = apply_prefilter(
         refs, state.search_criteria, min_score=config.prefilter_min_score
     )
+    passed_by_source = _count_by_source(passed)
+
+    # Per-source funnel: raw → deduped → prefiltered. Without this, a
+    # provider that returns 124 refs but only contributes 30 looks like
+    # under-performance instead of aggressive deduplication or rejection.
+    for source in sorted(raw_by_source.keys() | deduped_by_source.keys()):
+        raw = raw_by_source.get(source, 0)
+        deduped = deduped_by_source.get(source, 0)
+        kept = passed_by_source.get(source, 0)
+        logger.info(
+            "discovery.source_funnel",
+            source=source,
+            raw=raw,
+            deduped=deduped,
+            dedup_dropped=raw - deduped,
+            prefilter_dropped=deduped - kept,
+            kept=kept,
+        )
 
     logger.info(
         "discovery.prefilter_results",
@@ -70,15 +91,18 @@ async def discovery_node(state: JobAgentState) -> JobAgentState:
     listings = [ref_to_job_listing(ref) for ref in passed]
     state.discovered_listings = listings
 
-    source_counts = {
-        s.value: sum(1 for r in passed if r.source == s)
-        for s in JobSource
-        if any(r.source == s for r in passed)
-    }
     logger.info(
         "discovery.complete",
         total_discovered=len(listings),
-        sources=source_counts,
+        sources=passed_by_source,
     )
 
     return state
+
+
+def _count_by_source(refs: list) -> dict[str, int]:  # type: ignore[type-arg]
+    counts: dict[str, int] = {}
+    for ref in refs:
+        key = ref.source.value if isinstance(ref.source, JobSource) else str(ref.source)
+        counts[key] = counts.get(key, 0) + 1
+    return counts

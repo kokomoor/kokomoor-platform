@@ -16,6 +16,7 @@ from tenacity import (
 )
 
 from core.config import get_settings
+from core.llm.throttle import get_throttle
 from core.llm.usage import LLMUsage
 
 logger = structlog.get_logger(__name__)
@@ -140,15 +141,23 @@ class AnthropicClient:
         log.info("llm_request_start")
         log.debug("llm_request_prompt", prompt=prompt, system=system)
 
+        settings = get_settings()
+        throttle = get_throttle(
+            max_concurrent_requests=settings.llm_max_concurrency,
+            output_tokens_per_minute=settings.llm_output_tokens_per_minute,
+        )
+
         start = time.monotonic()
         try:
-            response = await self._client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_param,
-                messages=messages,  # type: ignore[arg-type]
-            )
+            async with throttle.global_semaphore:
+                await throttle.output_token_bucket.acquire(max_tokens)
+                response = await self._client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_param,
+                    messages=messages,  # type: ignore[arg-type]
+                )
         except Exception:
             self.usage.errors += 1
             log.exception("llm_request_failed")

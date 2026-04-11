@@ -92,6 +92,18 @@ class Settings(BaseSettings):
             "Anthropic rate limits. 1 = strictly sequential."
         ),
     )
+    llm_output_tokens_per_minute: int = Field(
+        default=10_000,
+        ge=1_000,
+        description=(
+            "Process-wide ceiling on output tokens reserved per rolling "
+            "60-second window. Should match the org's Anthropic per-minute "
+            "output-token quota. The TokenBucket throttle reserves each "
+            "call's max_tokens up front and blocks new calls until the "
+            "window has room — preventing the burst-then-429 pattern that "
+            "stalls a run for 65 s every time it hits the limit."
+        ),
+    )
 
     # --- Browser (Playwright) ---
     browser_headless: bool = Field(
@@ -315,14 +327,27 @@ class Settings(BaseSettings):
         description="Wellfound account password. Never logged.",
     )
 
-    # Target company lists for ATS providers (comma-separated slugs)
+    # Target company lists for ATS providers (comma-separated slugs).
+    # Defaults seed a starter set of well-known AI/defence/infra companies
+    # that publish jobs on these boards so the providers actually run on a
+    # fresh install. The orchestrator silently skips Greenhouse/Lever when
+    # the list is empty, so the previous default of "" left both providers
+    # disabled-by-default even though their enable flags were True.
     greenhouse_target_companies: str = Field(
-        default="",
-        description="Comma-separated Greenhouse company board slugs (e.g. 'anduril,palantir,scale-ai').",
+        default=(
+            "anduril,scale-ai,databricks,airbnb,robinhood,rippling,plaid,"
+            "instacart,doordash,brex,gusto,affirm,coinbase,reddit,figma,"
+            "canva,notion,chime,stripe,ramp,mercury,vanta,retool"
+        ),
+        description="Comma-separated Greenhouse company board slugs.",
     )
     lever_target_companies: str = Field(
-        default="",
-        description="Comma-separated Lever company slugs (e.g. 'openai,anthropic').",
+        default=(
+            "anthropic,palantir,benchling,cresta,impira,inflection-ai,"
+            "rec-room,attentive,1password,clipboardhealth,fivetran,checkr,"
+            "lattice,replit,vercel,linear,crusoeenergy,cohere"
+        ),
+        description="Comma-separated Lever company slugs.",
     )
     workday_target_companies: str = Field(
         default="",

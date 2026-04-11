@@ -255,12 +255,13 @@ def validate_cover_letter_plan(
     _ensure_no_generic_opener(normalized_plan)
     _ensure_company_motivation_substance(normalized_plan)
     _ensure_prose_grounding(normalized_plan, profile)
+    _ensure_word_budget(normalized_plan)
+    _ensure_company_in_body(normalized_plan, expected_company)
 
     # Soft checks — quality issues that warrant warnings, not rejection.
     _warn_duplicate_claims(normalized_plan, warnings)
     _warn_company_reference(normalized_plan, expected_company, warnings)
-    _warn_word_budget(normalized_plan, warnings)
-    _warn_company_in_body(normalized_plan, expected_company, warnings)
+    _warn_short_letter(normalized_plan, warnings)
     _warn_ai_tell_density(normalized_plan, warnings)
     _warn_motivation_body_overlap(normalized_plan, expected_company, warnings)
 
@@ -526,20 +527,44 @@ def _warn_company_reference(
         )
 
 
-def _warn_company_in_body(
-    plan: CoverLetterPlan, expected_company: str, warnings: list[str]
-) -> None:
+def _ensure_company_in_body(plan: CoverLetterPlan, expected_company: str) -> None:
+    """Hard-fail when the letter body never names the target company.
+
+    A letter that fails to mention the company by name in the prose is
+    indistinguishable from a generic template. The model has the company
+    name in the prompt; refusing to use it is a hard failure rather than
+    a quality nag, because the file would otherwise be sent to a human
+    recipient with the same flaw the warning was supposed to flag.
+    """
     body_text = _body_text(plan).lower()
     if expected_company.strip().lower() not in body_text:
-        warnings.append(f"Letter body does not mention the target company '{expected_company}'.")
+        raise ValueError(
+            f"Letter body does not mention the target company '{expected_company}'."
+        )
 
 
-def _warn_word_budget(plan: CoverLetterPlan, warnings: list[str]) -> None:
+def _warn_short_letter(plan: CoverLetterPlan, warnings: list[str]) -> None:
+    """Soft warning when the body falls below the recommended floor."""
     count = len(_body_text(plan).split())
-    if count > _MAX_WORDS:
-        warnings.append(f"Cover letter exceeds target ({count} words, max {_MAX_WORDS}).")
     if count < _MIN_WORDS:
         warnings.append(f"Cover letter is short ({count} words, min {_MIN_WORDS}).")
+
+
+def _ensure_word_budget(plan: CoverLetterPlan) -> None:
+    """Hard-fail when the body exceeds the upper word ceiling.
+
+    The previous warning let over-budget letters slip through; the cap is
+    a hard requirement (recruiters skim) so promote it to a ValueError
+    and let the structured-output retry loop ask the model to trim. The
+    short-letter case stays a warning because some compressed openings
+    are intentional and salvageable.
+    """
+    count = len(_body_text(plan).split())
+    if count > _MAX_WORDS:
+        raise ValueError(
+            f"Cover letter exceeds the {_MAX_WORDS}-word ceiling ({count} words). "
+            "Trim filler and tighten the body paragraphs."
+        )
 
 
 def _warn_ai_tell_density(plan: CoverLetterPlan, warnings: list[str]) -> None:

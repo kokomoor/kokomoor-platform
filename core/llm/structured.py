@@ -76,15 +76,33 @@ async def structured_complete(
         ValueError: If the response cannot be parsed after all retries.
     """
     schema_json = json.dumps(response_model.model_json_schema(), indent=2)
-    full_prompt = f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
 
-    # Render stable content (system_prefix) before the volatile base
-    # instruction so the cached prefix stays byte-identical. The base
-    # instruction is tiny so duplicating it after the prefix is fine.
-    if system_prefix:
-        system_message = f"{system_prefix}\n\n{_STRUCTURED_SYSTEM_PROMPT}"
+    # When the caller asks for prompt caching, fold the schema into the
+    # system message instead of the user prompt. The schema is identical
+    # across every call in a run, so it belongs in the cacheable prefix.
+    # This also pushes the prefix above the per-model minimum cache size
+    # (1024 tokens for Sonnet/Opus, 2048 for Haiku) when the caller's
+    # own system_prefix is too small to qualify on its own. When caching
+    # is off we keep the legacy behaviour of appending the schema to the
+    # user prompt so non-cached callers behave identically.
+    if cache_system:
+        system_parts = []
+        if system_prefix:
+            system_parts.append(system_prefix)
+        system_parts.append(
+            "Respond with JSON matching this schema:\n" + schema_json
+        )
+        system_parts.append(_STRUCTURED_SYSTEM_PROMPT)
+        system_message = "\n\n".join(system_parts)
+        full_prompt = prompt
     else:
-        system_message = _STRUCTURED_SYSTEM_PROMPT
+        full_prompt = (
+            f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
+        )
+        if system_prefix:
+            system_message = f"{system_prefix}\n\n{_STRUCTURED_SYSTEM_PROMPT}"
+        else:
+            system_message = _STRUCTURED_SYSTEM_PROMPT
 
     last_error: str = ""
     for attempt in range(1 + max_retries):

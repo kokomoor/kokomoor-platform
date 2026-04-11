@@ -252,9 +252,11 @@ class TestBulkExtractionNode:
                 new_callable=AsyncMock,
                 return_value=extracted,
             ),
-            patch("pipelines.job_agent.nodes.bulk_extraction.asyncio") as mock_asyncio,
+            patch(
+                "pipelines.job_agent.nodes.bulk_extraction.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
-            mock_asyncio.sleep = AsyncMock()
             state = JobAgentState(qualified_listings=[listing])
             result = await bulk_extraction_node(state)
 
@@ -273,9 +275,11 @@ class TestBulkExtractionNode:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network failure"),
             ),
-            patch("pipelines.job_agent.nodes.bulk_extraction.asyncio") as mock_asyncio,
+            patch(
+                "pipelines.job_agent.nodes.bulk_extraction.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
-            mock_asyncio.sleep = AsyncMock()
             state = JobAgentState(qualified_listings=[listing])
             result = await bulk_extraction_node(state)
 
@@ -314,9 +318,11 @@ class TestBulkExtractionNode:
                 new_callable=AsyncMock,
                 side_effect=_side_effect,
             ),
-            patch("pipelines.job_agent.nodes.bulk_extraction.asyncio") as mock_asyncio,
+            patch(
+                "pipelines.job_agent.nodes.bulk_extraction.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
-            mock_asyncio.sleep = AsyncMock()
             state = JobAgentState(qualified_listings=[listing1, listing2])
             result = await bulk_extraction_node(state)
 

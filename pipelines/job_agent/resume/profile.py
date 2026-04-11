@@ -16,9 +16,19 @@ from pipelines.job_agent.models.resume_tailoring import MasterBullet, ResumeMast
 
 logger = structlog.get_logger(__name__)
 
+# Per-process cache keyed by (resolved_path, mtime_ns). Each pipeline
+# run touches the master profile from ranking, tailoring, and cover
+# letter nodes; before this cache the YAML was parsed and validated 3x.
+# Keying on mtime means a manual edit on disk still picks up cleanly
+# without needing an explicit cache_clear() in tests.
+_PROFILE_CACHE: dict[tuple[str, int], ResumeMasterProfile] = {}
+
 
 def load_master_profile(path: Path) -> ResumeMasterProfile:
     """Load and validate the master resume profile from a YAML file.
+
+    Result is cached by (path, mtime) so repeated calls within a run
+    do not re-parse and re-validate the YAML.
 
     Raises:
         FileNotFoundError: If the profile YAML does not exist.
@@ -28,12 +38,18 @@ def load_master_profile(path: Path) -> ResumeMasterProfile:
         msg = f"Master profile not found: {path}"
         raise FileNotFoundError(msg)
 
+    cache_key = (str(path.resolve()), path.stat().st_mtime_ns)
+    cached = _PROFILE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         msg = f"Expected YAML mapping, got {type(raw).__name__}"
         raise ValueError(msg)
 
     profile = ResumeMasterProfile.model_validate(raw)
+    _PROFILE_CACHE[cache_key] = profile
     logger.info(
         "master_profile_loaded",
         path=str(path),
