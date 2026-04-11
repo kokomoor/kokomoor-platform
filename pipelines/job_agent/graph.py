@@ -228,7 +228,7 @@ def build_manual_graph(
         "job_analysis",
         _should_continue_after_job_analysis,
         {
-            "tailoring": "tailoring",
+            "ranking": "tailoring",  # manual graph skips ranking, goes straight to tailoring
             "notification": "notification",
         },
     )

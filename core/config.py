@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve project root relative to this file's location.
@@ -135,6 +135,17 @@ class Settings(BaseSettings):
     log_json: bool = Field(
         default=True,
         description="Emit structured JSON logs (True) or human-readable (False).",
+    )
+    log_file_enabled: bool = Field(
+        default=True,
+        description=(
+            "Write logs to a rotating file in addition to stdout. "
+            "Files land in ``log_file_dir`` and rotate at 10 MB, keeping 7 backups."
+        ),
+    )
+    log_file_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "logs"),
+        description="Directory for rotating log files. Created automatically if absent.",
     )
     langsmith_api_key: SecretStr = Field(
         default=SecretStr(""),
@@ -433,6 +444,31 @@ class Settings(BaseSettings):
         default=True,
         description="Enable anti-detection measures in Playwright.",
     )
+
+    # --- Validators ---
+
+    @field_validator(
+        "resume_master_profile_path",
+        "cover_letter_style_guide_path",
+        mode="before",
+    )
+    @classmethod
+    def _resolve_relative_paths(cls, v: object) -> object:
+        """Resolve relative file paths against the project root.
+
+        When a path is configured as a relative string (e.g. in a .env file),
+        Python resolves it against the *current working directory* at the time
+        Path() is evaluated — which varies depending on how the process is
+        launched (cron, IDE, script, etc.). This validator normalises any
+        relative path to an absolute one anchored at the project root so that
+        behaviour is consistent regardless of CWD.
+        """
+        if not isinstance(v, str):
+            return v
+        p = Path(v)
+        if not p.is_absolute():
+            p = _PROJECT_ROOT / p
+        return str(p)
 
     @property
     def is_dev(self) -> bool:

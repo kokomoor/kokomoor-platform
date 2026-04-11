@@ -13,7 +13,6 @@ from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
 )
 
 from core.config import get_settings
@@ -26,11 +25,34 @@ def _log_llm_retry(retry_state: RetryCallState) -> None:
     wait_s = 0.0
     if retry_state.next_action is not None:
         wait_s = retry_state.next_action.sleep
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
     structlog.get_logger().warning(
         "llm_retry",
         attempt=retry_state.attempt_number,
-        wait=wait_s,
+        wait=round(wait_s, 1),
+        error_type=type(exc).__name__ if exc else None,
     )
+
+
+def _adaptive_wait(retry_state: RetryCallState) -> float:
+    """Adaptive backoff: long waits for rate-limit errors, short for transient errors.
+
+    Anthropic enforces per-minute token and request limits (TPM/RPM). A 429
+    RateLimitError means the org's quota window is exhausted; retrying within
+    seconds is futile — the window resets on a 60-second boundary. We wait at
+    least 65 seconds on the first rate-limit retry so that the next attempt
+    lands in a fresh quota window. Subsequent retries double (capped at 300 s).
+
+    Plain network errors (APIConnectionError) typically resolve in seconds so
+    we keep a short exponential for those.
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    attempt = retry_state.attempt_number  # 1-based
+    if isinstance(exc, anthropic.RateLimitError):
+        # 65 → 130 → 260 → 300 … seconds
+        return min(65.0 * (2 ** (attempt - 1)), 300.0)
+    # Transient connection errors: 2 → 4 → 8 … seconds (capped at 30)
+    return min(2.0 * (2 ** (attempt - 1)), 30.0)
 
 
 class AnthropicClient:
@@ -52,8 +74,8 @@ class AnthropicClient:
 
     @retry(
         retry=retry_if_exception_type((anthropic.RateLimitError, anthropic.APIConnectionError)),
-        wait=wait_exponential(multiplier=1, min=2, max=60),
-        stop=stop_after_attempt(3),
+        wait=_adaptive_wait,
+        stop=stop_after_attempt(5),
         before_sleep=_log_llm_retry,
     )
     async def complete(
