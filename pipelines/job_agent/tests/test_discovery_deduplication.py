@@ -88,7 +88,10 @@ class TestDbDedup:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("core.database.get_session", return_value=mock_session),
+            patch(
+                "pipelines.job_agent.discovery.deduplication.get_session",
+                return_value=mock_session,
+            ),
             patch(
                 "pipelines.job_agent.discovery.deduplication.FileDedup",
                 return_value=_empty_file_dedup(tmp_path),
@@ -113,7 +116,10 @@ class TestDbDedup:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("core.database.get_session", return_value=mock_session),
+            patch(
+                "pipelines.job_agent.discovery.deduplication.get_session",
+                return_value=mock_session,
+            ),
             patch(
                 "pipelines.job_agent.discovery.deduplication.FileDedup",
                 return_value=_empty_file_dedup(tmp_path),
@@ -133,7 +139,10 @@ class TestDbDedup:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("core.database.get_session", return_value=mock_session),
+            patch(
+                "pipelines.job_agent.discovery.deduplication.get_session",
+                return_value=mock_session,
+            ),
             patch(
                 "pipelines.job_agent.discovery.deduplication.FileDedup",
                 return_value=_empty_file_dedup(tmp_path),

@@ -65,6 +65,7 @@ class AnthropicClient:
         temperature: float = 0.0,
         model: str | None = None,
         run_id: str = "",
+        cache_system: bool = False,
     ) -> str:
         """Send a completion request and return the text response.
 
@@ -75,6 +76,11 @@ class AnthropicClient:
             temperature: Sampling temperature (0.0 = deterministic).
             model: Override the default model for this call.
             run_id: Pipeline run identifier for log correlation.
+            cache_system: If True and ``system`` is set, mark the system
+                prompt with ``cache_control={"type":"ephemeral"}`` so the
+                Anthropic prefix cache can reuse it across calls. The
+                system text must be stable byte-for-byte and long enough
+                to hit the per-model minimum (~1024 tokens) to be cached.
 
         Returns:
             The assistant's text response.
@@ -86,6 +92,20 @@ class AnthropicClient:
         request_id = uuid.uuid4().hex[:16]
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
+        system_param: Any
+        if system is None:
+            system_param = anthropic.NOT_GIVEN
+        elif cache_system:
+            system_param = [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        else:
+            system_param = system
+
         log = logger.bind(
             model=model,
             request_id=request_id,
@@ -93,6 +113,7 @@ class AnthropicClient:
             temperature=temperature,
             max_tokens=max_tokens,
             prompt_len=len(prompt),
+            cache_system=cache_system,
         )
         log.info("llm_request_start")
         log.debug("llm_request_prompt", prompt=prompt, system=system)
@@ -103,7 +124,7 @@ class AnthropicClient:
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                system=system if system is not None else anthropic.NOT_GIVEN,  # type: ignore[arg-type]
+                system=system_param,
                 messages=messages,  # type: ignore[arg-type]
             )
         except Exception:

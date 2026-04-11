@@ -57,6 +57,15 @@ class Settings(BaseSettings):
         default=f"sqlite+aiosqlite:///{_PROJECT_ROOT / 'data' / 'platform.db'}",
         description="SQLAlchemy-style connection string. Default: local SQLite.",
     )
+    database_echo: bool = Field(
+        default=False,
+        description=(
+            "Emit raw SQL to stderr (SQLAlchemy ``echo``). Off by default — "
+            "the structured pipeline logs are usually more useful and the "
+            "echo stream floods them. Enable explicitly when debugging "
+            "schema or query issues."
+        ),
+    )
 
     # --- LLM (Anthropic) ---
     anthropic_api_key: SecretStr = Field(
@@ -64,11 +73,25 @@ class Settings(BaseSettings):
         description="Anthropic API key. Required for any LLM operations.",
     )
     anthropic_model: str = Field(
-        default="claude-sonnet-4-20250514",
-        description="Default Claude model for API calls.",
+        default="claude-sonnet-4-6",
+        description=(
+            "Default Claude model for API calls. Sonnet 4.6 is the current "
+            "recommended general-purpose model (Apr 2026)."
+        ),
     )
     anthropic_max_retries: int = Field(default=3, ge=1, le=10)
     anthropic_timeout_seconds: int = Field(default=120, ge=10)
+    llm_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description=(
+            "Max concurrent in-flight LLM requests per pipeline run. "
+            "Caps fan-out in the analysis/tailoring engines. Raising this "
+            "can speed up large runs but increases the chance of hitting "
+            "Anthropic rate limits. 1 = strictly sequential."
+        ),
+    )
 
     # --- Browser (Playwright) ---
     browser_headless: bool = Field(
@@ -177,7 +200,7 @@ class Settings(BaseSettings):
 
     # --- Cover Letter Tailoring ---
     cover_letter_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="claude-sonnet-4-6",
         description="Model for the cover-letter planning/generation pass.",
     )
     cover_letter_max_tokens: int = Field(
@@ -318,6 +341,17 @@ class Settings(BaseSettings):
     )
 
     # Provider enable flags
+    # --- Filtering ---
+    filter_allow_unknown_salary: bool = Field(
+        default=True,
+        description=(
+            "When True (default), listings with no posted salary bypass the "
+            "floor and reach tailoring. When False, missing-salary listings "
+            "are dropped — useful if you want to enforce a hard floor and "
+            "trust that desirable roles publish compensation bands."
+        ),
+    )
+
     discovery_linkedin_enabled: bool = Field(default=True)
     discovery_indeed_enabled: bool = Field(default=True)
     discovery_builtin_enabled: bool = Field(default=True)
@@ -364,11 +398,11 @@ class Settings(BaseSettings):
         default=30, ge=5, description="Wall-clock cap for heal remediation."
     )
     heal_diagnosis_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="claude-sonnet-4-6",
         description="Model for heal diagnosis pass.",
     )
     heal_remediation_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="claude-sonnet-4-6",
         description="Model for heal remediation agent.",
     )
 

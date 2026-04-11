@@ -7,8 +7,8 @@ and can be scraped by a Prometheus server or exported on demand.
 Usage:
     from core.observability.metrics import LLM_REQUESTS, LLM_LATENCY
 
-    LLM_REQUESTS.labels(model="claude-sonnet-4-20250514", status="success").inc()
-    LLM_LATENCY.labels(model="claude-sonnet-4-20250514").observe(1.23)
+    LLM_REQUESTS.labels(model="claude-sonnet-4-6", status="success").inc()
+    LLM_LATENCY.labels(model="claude-sonnet-4-6").observe(1.23)
 """
 
 from __future__ import annotations

@@ -2,22 +2,23 @@
 
 Run with: python -m pipelines.job_agent
 
-Initialises logging, builds the LangGraph, and executes a pipeline run.
+Initialises logging, ensures the database schema is in place, builds the
+LangGraph, and executes a pipeline run.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
-from typing import cast
 
 import structlog
 
 from core.config import get_settings
+from core.database import dispose_engine, init_db
 from core.observability import setup_logging
 from pipelines.job_agent.graph import build_graph
 from pipelines.job_agent.models import JobSource, SearchCriteria
-from pipelines.job_agent.state import JobAgentState
+from pipelines.job_agent.state import JobAgentState, coerce_state
 
 
 async def main() -> None:
@@ -31,6 +32,11 @@ async def main() -> None:
         environment=settings.environment.value,
         has_api_key=settings.has_anthropic_key,
     )
+
+    # Ensure the database schema exists before any node tries to read it.
+    # Alembic owns long-term schema evolution; init_db() is the idempotent
+    # safety net for fresh checkouts and the local sqlite default.
+    await init_db()
 
     # Build search criteria from config / defaults.
     criteria = SearchCriteria(
@@ -58,17 +64,25 @@ async def main() -> None:
     logger.info("pipeline_start", run_id=initial_state.run_id)
 
     try:
-        final_state = cast("JobAgentState", await graph.ainvoke(initial_state))
+        # LangGraph compiles dataclass state into a TypedDict-like return shape;
+        # ``ainvoke`` therefore returns ``dict[str, Any]`` rather than the
+        # original dataclass instance. ``coerce_state`` rehydrates either form
+        # into a real ``JobAgentState`` so downstream attribute access is safe.
+        raw_result = await graph.ainvoke(initial_state)
+        final_state = coerce_state(raw_result)
         logger.info(
             "pipeline_finished",
             phase=final_state.phase.value,
             discovered=len(final_state.discovered_listings),
             qualified=len(final_state.qualified_listings),
+            tailored=len(final_state.tailored_listings),
             errors=len(final_state.errors),
         )
     except Exception:
         logger.exception("pipeline_crashed")
         sys.exit(1)
+    finally:
+        await dispose_engine()
 
 
 if __name__ == "__main__":

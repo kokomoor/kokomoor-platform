@@ -164,24 +164,31 @@ class TestAuthDetection:
         provider = LinkedInProvider()
         page = AsyncMock()
         page.url = "https://www.linkedin.com/feed/"
-
-        assert await provider.is_authenticated(page) is True
-
-    @pytest.mark.asyncio
-    async def test_authenticated_on_jobs_url(self) -> None:
-        provider = LinkedInProvider()
-        page = AsyncMock()
-        page.url = "https://www.linkedin.com/jobs/search/?keywords=engineer"
         page.query_selector = AsyncMock(return_value=None)
         page.evaluate = AsyncMock(return_value=False)
 
         assert await provider.is_authenticated(page) is True
 
     @pytest.mark.asyncio
+    async def test_jobs_url_alone_not_authenticated(self) -> None:
+        """The ``/jobs/`` URL family is served to guests too (e.g. public
+        job-view pages), so the URL alone must not be a positive signal.
+        """
+        provider = LinkedInProvider()
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/jobs/search/?keywords=engineer"
+        page.query_selector = AsyncMock(return_value=None)
+        page.evaluate = AsyncMock(return_value=False)
+
+        assert await provider.is_authenticated(page) is False
+
+    @pytest.mark.asyncio
     async def test_authenticated_on_mynetwork_url(self) -> None:
         provider = LinkedInProvider()
         page = AsyncMock()
         page.url = "https://www.linkedin.com/mynetwork/"
+        page.query_selector = AsyncMock(return_value=None)
+        page.evaluate = AsyncMock(return_value=False)
 
         assert await provider.is_authenticated(page) is True
 
@@ -226,14 +233,8 @@ class TestAuthDetection:
         page = AsyncMock()
         page.url = "https://www.linkedin.com/"
 
-        call_count = 0
-
         async def _query_selector(sel: str) -> object | None:
-            nonlocal call_count
-            call_count += 1
-            if sel == "input#username, input#password":
-                return None
-            if sel == ".global-nav":
+            if sel in {"#global-nav", ".global-nav__primary-items"}:
                 return object()
             return None
 

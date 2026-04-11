@@ -27,11 +27,15 @@ async def notification_node(state: JobAgentState) -> JobAgentState:
     """
     state.phase = PipelinePhase.COMPLETE
 
+    tailored_with_resume = sum(
+        1 for li in state.tailored_listings if li.tailored_resume_path is not None
+    )
+
     logger.info(
         "pipeline_complete",
         discovered=len(state.discovered_listings),
         qualified=len(state.qualified_listings),
-        applied=len(state.applied_listings),
+        tailored=tailored_with_resume,
         errors=len(state.errors),
     )
 

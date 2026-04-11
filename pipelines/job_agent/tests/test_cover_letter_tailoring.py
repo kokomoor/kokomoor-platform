@@ -111,7 +111,7 @@ def _patch_settings(tmp_path: Path) -> None:
     os.environ["KP_COVER_LETTER_OUTPUT_DIR"] = str(tmp_path / "cover_letters")
     os.environ["KP_COVER_LETTER_MAX_TOKENS"] = "2200"
     os.environ["KP_COVER_LETTER_MAX_INPUT_CHARS"] = "12000"
-    os.environ["KP_COVER_LETTER_MODEL"] = "claude-sonnet-4-20250514"
+    os.environ["KP_COVER_LETTER_MODEL"] = "claude-sonnet-4-6"
     os.environ["KP_COVER_LETTER_STYLE_GUIDE_PATH"] = str(
         Path("pipelines/job_agent/context/cover_letter_style.md")
     )

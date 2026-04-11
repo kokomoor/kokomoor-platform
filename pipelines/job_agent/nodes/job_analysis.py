@@ -61,6 +61,7 @@ def _build_spec() -> StructuredAnalysisSpec[JobAgentState, JobListing, JobAnalys
         on_item_result=_on_item_result,
         on_item_error=_on_item_error,
         on_complete=_on_complete,
+        concurrency=get_settings().llm_max_concurrency,
     )
 
 

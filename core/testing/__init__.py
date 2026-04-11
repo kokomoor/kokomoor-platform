@@ -64,6 +64,7 @@ class MockLLMClient:
         temperature: float = 0.0,
         model: str | None = None,
         run_id: str = "",
+        cache_system: bool = False,
     ) -> str:
         """Return the next canned response."""
         kwargs: dict[str, Any] = {
@@ -72,6 +73,7 @@ class MockLLMClient:
             "temperature": temperature,
             "model": model,
             "run_id": run_id,
+            "cache_system": cache_system,
         }
         self.calls.append((prompt, kwargs))
         response = self.responses[self._call_index % len(self.responses)]

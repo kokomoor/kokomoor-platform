@@ -121,6 +121,52 @@ _COMPANY_SELECTORS = (
     ".base-search-card__subtitle",
 )
 
+# LinkedIn serves two distinct login forms with different input element
+# identifiers depending on whether you arrive at ``/login`` (authwall,
+# `id="username"`) or the guest ``/uas/login`` / modal flow
+# (`name="session_key"`). We probe both so the auth loop works on either.
+_USERNAME_SELECTORS = (
+    "input#username",
+    "input[name='session_key']",
+    "input[autocomplete='username']",
+)
+_PASSWORD_SELECTORS = (
+    "input#password",
+    "input[name='session_password']",
+    "input[autocomplete='current-password']",
+)
+
+
+async def _query_first(page: Page, selectors: tuple[str, ...]) -> ElementHandle | None:
+    """Return the first matching element handle for any of ``selectors``."""
+    for sel in selectors:
+        try:
+            el = await page.query_selector(sel)
+            if el is not None:
+                return el
+        except Exception:
+            continue
+    return None
+
+
+async def _wait_first(
+    page: Page, selectors: tuple[str, ...], *, timeout: int
+) -> ElementHandle | None:
+    """Wait for the first selector in ``selectors`` that resolves, or None on timeout.
+
+    Unlike ``_query_first``, this gives each selector a fair share of the
+    wall-clock budget so transient late-mount fields still get caught.
+    """
+    per_selector_timeout = max(timeout // len(selectors), 500)
+    for sel in selectors:
+        try:
+            el = await page.wait_for_selector(sel, timeout=per_selector_timeout)
+            if el is not None:
+                return el
+        except Exception:
+            continue
+    return None
+
 
 class LinkedInProvider(BaseProvider):
     """Browser-based LinkedIn job search scraper.
@@ -145,41 +191,54 @@ class LinkedInProvider(BaseProvider):
     async def is_authenticated(self, page: Page) -> bool:
         """Detect whether the current page state represents a logged-in session.
 
-        Checks URL patterns first (cheapest), then DOM indicators. Returns
-        True on first positive signal to avoid unnecessary DOM queries.
+        The URL heuristics here are deliberately narrow: LinkedIn happily
+        serves unauthenticated users on ``/jobs/view/<id>`` and the ATS
+        guest job pages under ``/jobs/`` without a login, so matching
+        ``/jobs/`` alone produces false positives. We only trust URL
+        signals that *require* a logged-in session (``/feed``,
+        ``/mynetwork``, ``/in/<handle>``) and otherwise fall through to
+        positive DOM signals that prove the global nav rendered.
         """
         url_lower = page.url.lower()
 
-        if "/login" in url_lower or "/checkpoint" in url_lower:
+        # Hard negatives -- any form of authwall or checkpoint means we
+        # are logged out regardless of what else is on the page.
+        if (
+            "/login" in url_lower
+            or "/checkpoint" in url_lower
+            or "/authwall" in url_lower
+            or "/uas/login" in url_lower
+            or "/jobs/guest/" in url_lower
+        ):
             return False
 
-        if "/feed" in url_lower:
-            return True
-        if "/jobs/" in url_lower and "/jobs/guest/" not in url_lower:
-            return True
-        if "/in/" in url_lower or "/mynetwork" in url_lower:
+        # A visible login form is a hard negative even if the URL looks
+        # innocent (LinkedIn renders the authwall inline on guest pages).
+        if await _query_first(page, _USERNAME_SELECTORS + _PASSWORD_SELECTORS) is not None:
+            return False
+
+        # Hard positives: these URLs are gated behind login.
+        if (
+            "/feed" in url_lower
+            or "/mynetwork" in url_lower
+            or "/in/" in url_lower
+            or "/messaging" in url_lower
+            or "/notifications" in url_lower
+        ):
             return True
 
-        try:
-            if await page.query_selector("input#username, input#password"):
-                return False
-        except Exception:
-            pass
-
+        # Otherwise require a positive DOM signal: the global nav bar
+        # only renders for authenticated users.
         nav_selectors = (
             ".global-nav__me-photo",
-            ".global-nav",
+            ".global-nav__primary-items",
             "a[href='/feed/']",
             "[data-control-name='identity_welcome_message']",
             "nav[aria-label*='primary'] a[href*='/in/']",
             "#global-nav",
         )
-        for sel in nav_selectors:
-            try:
-                if await page.query_selector(sel):
-                    return True
-            except Exception:
-                continue
+        if await _query_first(page, nav_selectors) is not None:
+            return True
 
         try:
             has_feed: bool = await page.evaluate(
@@ -317,12 +376,9 @@ class LinkedInProvider(BaseProvider):
 
     async def _is_password_only_page(self, page: Page) -> bool:
         """Check if only the password field is present (no username)."""
-        try:
-            has_password = await page.query_selector("input#password")
-            has_username = await page.query_selector("input#username")
-            return has_password is not None and has_username is None
-        except Exception:
-            return False
+        has_password = await _query_first(page, _PASSWORD_SELECTORS)
+        has_username = await _query_first(page, _USERNAME_SELECTORS)
+        return has_password is not None and has_username is None
 
     async def _complete_password_entry(
         self, page: Page, email: str, password: str, behavior: HumanBehavior
@@ -337,12 +393,8 @@ class LinkedInProvider(BaseProvider):
         if await self._is_password_only_page(page):
             return await self._fill_password_and_submit(page, password, behavior)
 
-        try:
-            username_input = await page.query_selector("input#username")
-            if username_input:
-                return await self._standard_login(page, email, password, behavior)
-        except Exception:
-            pass
+        if await _query_first(page, _USERNAME_SELECTORS) is not None:
+            return await self._standard_login(page, email, password, behavior)
 
         logger.warning("linkedin_auth_unexpected_state_after_welcome_back", url=page.url)
         return False
@@ -351,13 +403,9 @@ class LinkedInProvider(BaseProvider):
         self, page: Page, password: str, behavior: HumanBehavior
     ) -> bool:
         """Fill password field and submit when username is pre-filled."""
-        try:
-            password_input = await page.wait_for_selector("input#password", timeout=8_000)
-        except Exception:
-            logger.warning("linkedin_password_field_not_found_timeout")
-            return False
-
+        password_input = await _wait_first(page, _PASSWORD_SELECTORS, timeout=8_000)
         if password_input is None:
+            logger.warning("linkedin_password_field_not_found_timeout")
             return False
 
         await behavior.human_click(page, password_input)
@@ -371,13 +419,9 @@ class LinkedInProvider(BaseProvider):
         self, page: Page, email: str, password: str, behavior: HumanBehavior
     ) -> bool:
         """Full username + password login flow."""
-        try:
-            username_input = await page.wait_for_selector("input#username", timeout=10_000)
-        except Exception:
-            logger.warning("linkedin_username_field_not_found")
-            return False
-
+        username_input = await _wait_first(page, _USERNAME_SELECTORS, timeout=10_000)
         if username_input is None:
+            logger.warning("linkedin_username_field_not_found")
             return False
 
         await behavior.human_click(page, username_input)
@@ -385,13 +429,9 @@ class LinkedInProvider(BaseProvider):
         await behavior.type_with_cadence(username_input, email)
         await behavior.between_actions_pause(min_s=0.5, max_s=1.5)
 
-        try:
-            password_input = await page.wait_for_selector("input#password", timeout=5_000)
-        except Exception:
-            logger.warning("linkedin_password_field_not_found")
-            return False
-
+        password_input = await _wait_first(page, _PASSWORD_SELECTORS, timeout=5_000)
         if password_input is None:
+            logger.warning("linkedin_password_field_not_found")
             return False
 
         await behavior.human_click(page, password_input)
