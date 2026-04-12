@@ -100,9 +100,8 @@ class SearchCriteria(PydanticBaseModel):
     locations: list[str] = PydanticField(default_factory=list)
     salary_floor: int = 170_000
     remote_ok: bool = True
-    sources: list[JobSource] = PydanticField(
-        default_factory=lambda: [JobSource.LINKEDIN, JobSource.WELLFOUND, JobSource.BUILTIN]
-    )
+    # Empty means "all enabled providers" (resolved by the orchestrator).
+    sources: list[JobSource] = PydanticField(default_factory=list)
 
 
 class JobFilter(PydanticBaseModel):

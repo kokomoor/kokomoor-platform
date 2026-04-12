@@ -1,0 +1,65 @@
+site_id: indeed
+display_name: Indeed Jobs
+base_url: https://www.indeed.com
+requires_browser: false
+fixture_refresh_days: 14
+
+auth:
+  type: none
+
+rate_limit:
+  min_delay_s: 1.5
+  max_delay_s: 4.0
+  pages_before_long_pause: 8
+  long_pause_min_s: 35.0
+  long_pause_max_s: 90.0
+
+navigation:
+  search_url_template: "https://www.indeed.com/jobs?q={query}&l={location}&fromage=14"
+  pagination: url_parameter
+  page_param_name: start
+
+selectors:
+  result_item: "div.job_seen_beacon"
+  field_map:
+    title: "h2.jobTitle a"
+    company: "span.companyName"
+    location: "div.companyLocation"
+    salary: "div.salary-snippet-container"
+    url: "a[data-jk]"
+  detail_link: "h2.jobTitle a"
+  detail_field_map:
+    description: "#jobDescriptionText"
+
+output_contract:
+  fields:
+    - name: title
+      type: str
+      required: true
+      description: Job title
+    - name: company
+      type: str
+      required: true
+      description: Hiring company name
+    - name: location
+      type: str
+      required: false
+      description: Job location
+    - name: url
+      type: url
+      required: true
+      description: Direct link to job posting
+    - name: salary
+      type: str
+      required: false
+      description: Salary range if listed
+    - name: description
+      type: str
+      required: false
+      description: Full job description text
+  dedup_fields:
+    - title
+    - company
+    - url
+  min_records_per_search: 3
+  max_empty_pages_before_stop: 3

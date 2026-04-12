@@ -1,11 +1,21 @@
-"""Playwright browser lifecycle management.
+"""Playwright browser lifecycle management and shared browser infrastructure.
 
 Provides a managed async browser context with anti-detection defaults,
 rate limiting, and proper resource cleanup. All pipelines that need
 web interaction share this abstraction.
 
+Also re-exports shared browser automation utilities (human simulation,
+CAPTCHA handling, session persistence, rate limiting, failure capture)
+that were promoted from ``pipelines.job_agent.discovery`` to live here
+as domain-agnostic core infrastructure.
+
 Usage:
     from core.browser import BrowserManager
+    from core.browser.human_behavior import HumanBehavior
+    from core.browser.captcha import CaptchaHandler
+    from core.browser.session import SessionStore
+    from core.browser.rate_limiter import RateLimiter, RateLimitProfile
+    from core.browser.debug_capture import FailureCapture
 
     async with BrowserManager() as browser:
         page = await browser.new_page()
@@ -15,7 +25,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from playwright.async_api import (
@@ -27,7 +37,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from core.browser.stealth import apply_stealth_defaults
+from core.browser.stealth import apply_page_stealth, apply_stealth_defaults
 from core.config import get_settings
 
 if TYPE_CHECKING:
@@ -44,12 +54,13 @@ class BrowserManager:
     avoid triggering bot detection.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, storage_state: dict[str, Any] | None = None) -> None:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._last_navigation: float = 0.0
         self._settings = get_settings()
+        self._storage_state = storage_state
 
     async def __aenter__(self) -> BrowserManager:
         """Launch the browser and create a context."""
@@ -59,6 +70,8 @@ class BrowserManager:
             headless=self._settings.browser_headless,
         )
         context_options = apply_stealth_defaults() if self._settings.enable_browser_stealth else {}
+        if self._storage_state is not None:
+            context_options["storage_state"] = self._storage_state
         self._context = await self._browser.new_context(**context_options)
 
         logger.info(
@@ -76,11 +89,20 @@ class BrowserManager:
     ) -> None:
         """Close browser and playwright resources."""
         if self._context:
-            await self._context.close()
+            try:
+                await self._context.close()
+            except Exception:
+                logger.exception("browser_context_close_failed")
         if self._browser:
-            await self._browser.close()
+            try:
+                await self._browser.close()
+            except Exception:
+                logger.exception("browser_close_failed")
         if self._playwright:
-            await self._playwright.stop()
+            try:
+                await self._playwright.stop()
+            except Exception:
+                logger.exception("playwright_stop_failed")
         logger.info("browser_stopped")
 
     async def new_page(self) -> Page:
@@ -88,7 +110,21 @@ class BrowserManager:
         if self._context is None:
             msg = "BrowserManager must be used as an async context manager."
             raise RuntimeError(msg)
-        return await self._context.new_page()
+        page = await self._context.new_page()
+        if self._settings.enable_browser_stealth:
+            await apply_page_stealth(page)
+        return page
+
+    async def dump_storage_state(self) -> dict[str, Any]:
+        """Snapshot cookies, localStorage, and sessionStorage.
+
+        Returns a dict suitable for passing back as ``storage_state``
+        to a future ``BrowserManager`` to restore the session.
+        """
+        if self._context is None:
+            msg = "BrowserManager must be used as an async context manager."
+            raise RuntimeError(msg)
+        return cast("dict[str, Any]", await self._context.storage_state())
 
     async def rate_limited_goto(
         self,

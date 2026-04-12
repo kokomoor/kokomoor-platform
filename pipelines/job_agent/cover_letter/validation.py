@@ -255,12 +255,13 @@ def validate_cover_letter_plan(
     _ensure_no_generic_opener(normalized_plan)
     _ensure_company_motivation_substance(normalized_plan)
     _ensure_prose_grounding(normalized_plan, profile)
+    _ensure_word_budget(normalized_plan)
+    _ensure_company_in_body(normalized_plan, expected_company)
 
     # Soft checks — quality issues that warrant warnings, not rejection.
     _warn_duplicate_claims(normalized_plan, warnings)
     _warn_company_reference(normalized_plan, expected_company, warnings)
-    _warn_word_budget(normalized_plan, warnings)
-    _warn_company_in_body(normalized_plan, expected_company, warnings)
+    _warn_short_letter(normalized_plan, warnings)
     _warn_ai_tell_density(normalized_plan, warnings)
     _warn_motivation_body_overlap(normalized_plan, expected_company, warnings)
 
@@ -332,7 +333,11 @@ def _ensure_id_references_exist(plan: CoverLetterPlan, profile: ResumeMasterProf
     exp_ids = {exp.id for exp in profile.experience}
     edu_ids = {edu.id for edu in profile.education}
 
-    unknown_bullets = sorted({x for x in plan.selected_bullet_ids if x not in bullet_ids})
+    all_referenced_bullets = set(plan.selected_bullet_ids)
+    for mapping in plan.requirement_evidence:
+        all_referenced_bullets.update(mapping.supporting_bullet_ids)
+
+    unknown_bullets = sorted(all_referenced_bullets - bullet_ids)
     unknown_experience = sorted({x for x in plan.selected_experience_ids if x not in exp_ids})
     unknown_education = sorted({x for x in plan.selected_education_ids if x not in edu_ids})
 
@@ -378,16 +383,20 @@ def _ensure_evidence_mapping_consistency(plan: CoverLetterPlan) -> None:
     if not plan.requirement_evidence:
         raise ValueError("Cover letter must include requirement_evidence mapping.")
 
-    selected_ids = set(plan.selected_bullet_ids)
     for mapping in plan.requirement_evidence:
         if not mapping.requirement:
             raise ValueError("Each requirement_evidence entry must include a requirement.")
-        missing = [bid for bid in mapping.supporting_bullet_ids if bid not in selected_ids]
-        if missing:
-            raise ValueError(
-                "Requirement evidence references bullet IDs not present in selected_bullet_ids: "
-                f"{missing}"
-            )
+
+    # selected_bullet_ids is derived: it is the union of all supporting_bullet_ids
+    # across all requirement_evidence entries, plus any explicitly listed IDs.
+    # This eliminates the failure mode where the model populates requirement_evidence
+    # correctly but forgets to mirror the same IDs into the flat list.
+    all_evidence_ids = {
+        bid for mapping in plan.requirement_evidence for bid in mapping.supporting_bullet_ids
+    }
+    existing = set(plan.selected_bullet_ids)
+    merged = list(plan.selected_bullet_ids) + sorted(all_evidence_ids - existing)
+    plan.selected_bullet_ids[:] = list(dict.fromkeys(merged))  # stable dedup
 
 
 def _ensure_no_banned_phrases(
@@ -516,20 +525,42 @@ def _warn_company_reference(
         )
 
 
-def _warn_company_in_body(
-    plan: CoverLetterPlan, expected_company: str, warnings: list[str]
-) -> None:
+def _ensure_company_in_body(plan: CoverLetterPlan, expected_company: str) -> None:
+    """Hard-fail when the letter body never names the target company.
+
+    A letter that fails to mention the company by name in the prose is
+    indistinguishable from a generic template. The model has the company
+    name in the prompt; refusing to use it is a hard failure rather than
+    a quality nag, because the file would otherwise be sent to a human
+    recipient with the same flaw the warning was supposed to flag.
+    """
     body_text = _body_text(plan).lower()
     if expected_company.strip().lower() not in body_text:
-        warnings.append(f"Letter body does not mention the target company '{expected_company}'.")
+        raise ValueError(f"Letter body does not mention the target company '{expected_company}'.")
 
 
-def _warn_word_budget(plan: CoverLetterPlan, warnings: list[str]) -> None:
+def _warn_short_letter(plan: CoverLetterPlan, warnings: list[str]) -> None:
+    """Soft warning when the body falls below the recommended floor."""
     count = len(_body_text(plan).split())
-    if count > _MAX_WORDS:
-        warnings.append(f"Cover letter exceeds target ({count} words, max {_MAX_WORDS}).")
     if count < _MIN_WORDS:
         warnings.append(f"Cover letter is short ({count} words, min {_MIN_WORDS}).")
+
+
+def _ensure_word_budget(plan: CoverLetterPlan) -> None:
+    """Hard-fail when the body exceeds the upper word ceiling.
+
+    The previous warning let over-budget letters slip through; the cap is
+    a hard requirement (recruiters skim) so promote it to a ValueError
+    and let the structured-output retry loop ask the model to trim. The
+    short-letter case stays a warning because some compressed openings
+    are intentional and salvageable.
+    """
+    count = len(_body_text(plan).split())
+    if count > _MAX_WORDS:
+        raise ValueError(
+            f"Cover letter exceeds the {_MAX_WORDS}-word ceiling ({count} words). "
+            "Trim filler and tighten the body paragraphs."
+        )
 
 
 def _warn_ai_tell_density(plan: CoverLetterPlan, warnings: list[str]) -> None:

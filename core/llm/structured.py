@@ -43,6 +43,8 @@ async def structured_complete(
     model: str | None = None,
     max_tokens: int = 4096,
     run_id: str = "",
+    system_prefix: str | None = None,
+    cache_system: bool = False,
 ) -> T:
     """Request a structured response from Claude and validate it.
 
@@ -58,6 +60,14 @@ async def structured_complete(
         model: Optional model override.
         max_tokens: Maximum tokens in the response.
         run_id: Pipeline run identifier for log correlation.
+        system_prefix: Optional stable text to prepend to the system
+            message (e.g. a large style guide or prompt preamble).
+            Keeping this byte-identical across calls is required for the
+            prompt cache to hit.
+        cache_system: If True, mark the (composed) system prompt as a
+            cacheable prefix via ``cache_control={"type":"ephemeral"}``.
+            Only meaningful when ``system_prefix`` is large enough to
+            exceed the per-model cache minimum (~1024 tokens).
 
     Returns:
         A validated instance of ``response_model``.
@@ -66,7 +76,29 @@ async def structured_complete(
         ValueError: If the response cannot be parsed after all retries.
     """
     schema_json = json.dumps(response_model.model_json_schema(), indent=2)
-    full_prompt = f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
+
+    # When the caller asks for prompt caching, fold the schema into the
+    # system message instead of the user prompt. The schema is identical
+    # across every call in a run, so it belongs in the cacheable prefix.
+    # This also pushes the prefix above the per-model minimum cache size
+    # (1024 tokens for Sonnet/Opus, 2048 for Haiku) when the caller's
+    # own system_prefix is too small to qualify on its own. When caching
+    # is off we keep the legacy behaviour of appending the schema to the
+    # user prompt so non-cached callers behave identically.
+    if cache_system:
+        system_parts = []
+        if system_prefix:
+            system_parts.append(system_prefix)
+        system_parts.append("Respond with JSON matching this schema:\n" + schema_json)
+        system_parts.append(_STRUCTURED_SYSTEM_PROMPT)
+        system_message = "\n\n".join(system_parts)
+        full_prompt = prompt
+    else:
+        full_prompt = f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
+        if system_prefix:
+            system_message = f"{system_prefix}\n\n{_STRUCTURED_SYSTEM_PROMPT}"
+        else:
+            system_message = _STRUCTURED_SYSTEM_PROMPT
 
     last_error: str = ""
     for attempt in range(1 + max_retries):
@@ -79,10 +111,11 @@ async def structured_complete(
 
         raw = await client.complete(
             full_prompt + retry_context,
-            system=_STRUCTURED_SYSTEM_PROMPT,
+            system=system_message,
             model=model,
             max_tokens=max_tokens,
             run_id=run_id,
+            cache_system=cache_system,
         )
 
         # Strip markdown fences if Claude includes them despite instructions.

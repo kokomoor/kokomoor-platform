@@ -13,10 +13,10 @@ from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
 )
 
 from core.config import get_settings
+from core.llm.throttle import get_throttle
 from core.llm.usage import LLMUsage
 
 logger = structlog.get_logger(__name__)
@@ -26,11 +26,34 @@ def _log_llm_retry(retry_state: RetryCallState) -> None:
     wait_s = 0.0
     if retry_state.next_action is not None:
         wait_s = retry_state.next_action.sleep
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
     structlog.get_logger().warning(
         "llm_retry",
         attempt=retry_state.attempt_number,
-        wait=wait_s,
+        wait=round(wait_s, 1),
+        error_type=type(exc).__name__ if exc else None,
     )
+
+
+def _adaptive_wait(retry_state: RetryCallState) -> float:
+    """Adaptive backoff: long waits for rate-limit errors, short for transient errors.
+
+    Anthropic enforces per-minute token and request limits (TPM/RPM). A 429
+    RateLimitError means the org's quota window is exhausted; retrying within
+    seconds is futile — the window resets on a 60-second boundary. We wait at
+    least 65 seconds on the first rate-limit retry so that the next attempt
+    lands in a fresh quota window. Subsequent retries double (capped at 300 s).
+
+    Plain network errors (APIConnectionError) typically resolve in seconds so
+    we keep a short exponential for those.
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    attempt = retry_state.attempt_number  # 1-based
+    if isinstance(exc, anthropic.RateLimitError):
+        # 65 → 130 → 260 → 300 … seconds
+        return min(65.0 * float(2 ** (attempt - 1)), 300.0)
+    # Transient connection errors: 2 → 4 → 8 … seconds (capped at 30)
+    return min(2.0 * float(2 ** (attempt - 1)), 30.0)
 
 
 class AnthropicClient:
@@ -52,8 +75,8 @@ class AnthropicClient:
 
     @retry(
         retry=retry_if_exception_type((anthropic.RateLimitError, anthropic.APIConnectionError)),
-        wait=wait_exponential(multiplier=1, min=2, max=60),
-        stop=stop_after_attempt(3),
+        wait=_adaptive_wait,
+        stop=stop_after_attempt(5),
         before_sleep=_log_llm_retry,
     )
     async def complete(
@@ -65,6 +88,7 @@ class AnthropicClient:
         temperature: float = 0.0,
         model: str | None = None,
         run_id: str = "",
+        cache_system: bool = False,
     ) -> str:
         """Send a completion request and return the text response.
 
@@ -75,6 +99,11 @@ class AnthropicClient:
             temperature: Sampling temperature (0.0 = deterministic).
             model: Override the default model for this call.
             run_id: Pipeline run identifier for log correlation.
+            cache_system: If True and ``system`` is set, mark the system
+                prompt with ``cache_control={"type":"ephemeral"}`` so the
+                Anthropic prefix cache can reuse it across calls. The
+                system text must be stable byte-for-byte and long enough
+                to hit the per-model minimum (~1024 tokens) to be cached.
 
         Returns:
             The assistant's text response.
@@ -86,6 +115,20 @@ class AnthropicClient:
         request_id = uuid.uuid4().hex[:16]
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
+        system_param: Any
+        if system is None:
+            system_param = anthropic.NOT_GIVEN
+        elif cache_system:
+            system_param = [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        else:
+            system_param = system
+
         log = logger.bind(
             model=model,
             request_id=request_id,
@@ -93,19 +136,28 @@ class AnthropicClient:
             temperature=temperature,
             max_tokens=max_tokens,
             prompt_len=len(prompt),
+            cache_system=cache_system,
         )
         log.info("llm_request_start")
         log.debug("llm_request_prompt", prompt=prompt, system=system)
 
+        settings = get_settings()
+        throttle = get_throttle(
+            max_concurrent_requests=settings.llm_max_concurrency,
+            output_tokens_per_minute=settings.llm_output_tokens_per_minute,
+        )
+
         start = time.monotonic()
         try:
-            response = await self._client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system if system is not None else anthropic.NOT_GIVEN,  # type: ignore[arg-type]
-                messages=messages,  # type: ignore[arg-type]
-            )
+            async with throttle.global_semaphore:
+                await throttle.output_token_bucket.acquire(max_tokens)
+                response = await self._client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_param,
+                    messages=messages,  # type: ignore[arg-type]
+                )
         except Exception:
             self.usage.errors += 1
             log.exception("llm_request_failed")

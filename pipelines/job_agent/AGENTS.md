@@ -5,7 +5,7 @@ Job search automation pipeline. Discovers listings, filters by criteria, analyse
 ## Pipeline flow
 
 ```
-Default: Discovery → Filtering → Job Analysis → Tailoring → Cover Letter Tailoring → Human Review → Application → Tracking → Notification
+Default: Discovery → Filtering → Bulk Extraction → Job Analysis → Tailoring → Cover Letter Tailoring → Human Review → Application → Tracking → Notification
 Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Cover Letter Tailoring → Tracking → Notification
 ```
 
@@ -13,9 +13,10 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Cover Letter
 
 | Node | Status | Notes |
 |------|--------|-------|
-| Discovery | **Stub** | Returns empty list. M2: real scraping via `BrowserManager` + `structured_complete` |
+| Discovery | **Implemented** | Orchestrates browser + HTTP providers, deduplicates, prefilters, emits `JobListing` (no description). |
 | Manual Extraction (URL) | **Implemented** | Fetches a single direct job URL and emits one canonical `JobListing` into `qualified_listings` |
 | Filtering | **Implemented** | Salary floor filter. Keyword/role filters planned. |
+| Bulk Extraction | **Implemented** | Fetches full job page content for each qualified listing after filtering. Populates `description`. |
 | Job Analysis | **Implemented** | Dedicated LLM node: full JD → `JobAnalysisResult` (themes, quals, keywords). Stored on `state.job_analyses`. |
 | Tailoring | **Implemented** | Plan pass only (1 LLM call), consumes pre-computed analysis from state. Render → `.docx`. |
 | Cover Letter Tailoring | **Implemented** | 1 structured LLM call per listing. Validated against banned phrases, prose grounding, and evidence mapping. Render → `.docx`. |
@@ -34,6 +35,7 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Cover Letter
 | `models/` | `JobListing` (SQLModel, persisted), `SearchCriteria` / `JobFilter` (Pydantic, transient) |
 | `models/resume_tailoring.py` | `JobAnalysisResult`, `ResumeTailoringPlan`, master profile types — shared contract between job-analysis and tailoring nodes |
 | `nodes/` | One file per node — pure `async (state) -> state` functions |
+| `nodes/bulk_extraction.py` | Bulk extraction node: fetches full job descriptions for qualified listings |
 | `nodes/job_analysis.py` | Job analysis node: full JD → structured `JobAnalysisResult` via LLM |
 | `nodes/cover_letter_tailoring.py` | Cover letter tailoring node: 1 LLM call per listing → validated `.docx` |
 | `extraction/` | Job-specific URL → `JobListing` (layered parsing); **transport** via `core.fetch`; `inspection.py` writes markdown artifacts for manual review |
@@ -45,6 +47,22 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Cover Letter
 | `context/cover_letter_style.md` | Cover letter style guide with voice benchmarks from reference letters |
 | `tools/` | LLM tool definitions (currently empty) |
 | `tests/` | Unit tests with `MockLLMClient` and no real API calls |
+
+## Discovery subsystem
+
+The `pipelines/job_agent/discovery/` package implements browser-based and HTTP-based job listing collection. It is self-contained: all discovery-specific models, session management, rate limiting, and provider adapters live here.
+
+**Internal data type:** `ListingRef` (not `JobListing`) flows within the discovery subsystem. It is a lightweight frozen dataclass carrying only what's visible on a search result card. Conversion to the persisted `JobListing` happens via `ref_to_job_listing()` at the end of the discovery node, after deduplication and prefiltering.
+
+**Session persistence:** browser sessions (cookies, localStorage) are saved to `data/sessions/` (gitignored) by `SessionStore`. Sessions survive between runs and are restored automatically on the next run to maintain established logins and avoid triggering bot detection.
+
+**Configuration:** `DiscoveryConfig.from_settings(get_settings())` is the canonical way to build the discovery config in the node. It maps `KP_DISCOVERY_*` env vars into the subsystem's typed config object.
+
+**Provider tiers:**
+- **Browser providers** (LinkedIn, Indeed, Built In, Wellfound, Workday) — use `BrowserManager` for Playwright-based scraping with stealth, rate limiting, and session persistence.
+- **HTTP API providers** (Greenhouse, Lever) — use `core.fetch.HttpFetcher.fetch_json()`. No `BrowserManager` needed since these are public JSON APIs.
+
+See `discovery/AGENTS.md` for the full subsystem contract, data flow, and provider implementation checklist.
 
 ## Key rules
 

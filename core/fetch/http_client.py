@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import structlog
 
@@ -20,7 +22,7 @@ _DEFAULT_HEADERS = {
 
 
 class HttpFetcher:
-    """Fetch raw HTML over HTTPS with retries and timeouts."""
+    """Fetch raw HTML or JSON over HTTPS with retries and timeouts."""
 
     def __init__(
         self,
@@ -75,4 +77,44 @@ class HttpFetcher:
                     )
 
         msg = f"HTTP fetch failed after retries: {last_error}"
+        raise ValueError(msg)
+
+    async def fetch_json(self, url: str) -> Any:
+        """GET *url*, parse as JSON, and return the decoded payload.
+
+        Uses the same timeout, retry, and header configuration as ``fetch()``.
+        Raises ``ValueError`` on network failure or non-2xx status after retries.
+        """
+        last_error = ""
+        headers = dict(self._headers)
+        headers["Accept"] = "application/json"
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(self._timeout),
+            headers=headers,
+        ) as client:
+            for attempt in range(self._max_retries + 1):
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    logger.info(
+                        "fetch_json_complete",
+                        url=str(resp.url),
+                        status=resp.status_code,
+                        attempt=attempt + 1,
+                    )
+                    return resp.json()
+                except httpx.HTTPError as exc:
+                    last_error = str(exc)
+                    if attempt == self._max_retries:
+                        break
+                    logger.warning(
+                        "fetch_json_retry",
+                        url=url,
+                        attempt=attempt + 1,
+                        error=last_error[:160],
+                    )
+
+        msg = f"JSON fetch failed after retries: {last_error}"
         raise ValueError(msg)

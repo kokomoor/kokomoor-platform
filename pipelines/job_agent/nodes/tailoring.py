@@ -93,7 +93,48 @@ def _build_spec() -> TailoringSpec[
         on_item_success=_on_item_success,
         on_item_error=_on_item_error,
         on_complete=_on_complete,
+        # Static rules + the ResumeTailoringPlan schema (folded in by
+        # structured_complete) form the cached prefix; everything that
+        # changes per listing — analysis, profile inventory, positioning
+        # rules — stays in the user prompt.
+        build_cached_system=lambda _state, _runtime: _RESUME_PLAN_SYSTEM,
+        concurrency=get_settings().llm_max_concurrency,
     )
+
+
+_RESUME_PLAN_SYSTEM = (
+    "You produce a ResumeTailoringPlan that selects, orders, and "
+    "optionally rewrites resume bullets for a specific role.\n\n"
+    "Rules:\n"
+    "- Select the most relevant bullets for each experience and education "
+    "section.\n"
+    "- Order bullets within each section by relevance to the role — "
+    "strongest match first.\n"
+    "- For each bullet, choose one operation:\n"
+    "  - keep: use the bullet text as-is.\n"
+    "  - shorten: use the short variant (if available) for space savings.\n"
+    "  - rewrite: provide new text. You MUST preserve all employer names, "
+    "numbers, dates, and factual claims. Only change emphasis and framing.\n"
+    "- Maximum 4 bullets per experience section, 3 per education section.\n"
+    "- Write a 1-2 sentence professional summary (max 40 words) targeting "
+    "this specific role.\n"
+    "- Select the most relevant subset of skills to highlight (8-12 items).\n"
+    "- Only reference bullet IDs and section IDs that appear in the "
+    "candidate profile provided in the user message.\n"
+    "- In bullet text and summary prose, do not use inline em dashes or "
+    "en dashes. Prefer semicolons, commas, or sentence splits.\n\n"
+    "Page-fill constraint:\n"
+    "The rendered resume must fill at least one full page. A resume that "
+    "leaves visible whitespace at the bottom of the first page looks "
+    "incomplete. To achieve this:\n"
+    "- Include at least 3 experience sections with 3-4 bullets each.\n"
+    "- Include at least 2 education sections with 1-2 bullets each.\n"
+    "- Include at least 6-8 skills in the skills highlight.\n"
+    "- When in doubt between keeping an additional relevant bullet or "
+    "omitting it, keep it.\n"
+    "- The resume may extend slightly past one page for senior roles; "
+    "that is acceptable. Being shorter than one page is never acceptable.\n"
+)
 
 
 async def tailoring_node(

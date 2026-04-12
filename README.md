@@ -16,11 +16,24 @@ The pipeline scrapes the full job page (qualifications, requirements, salary, ev
 
 ### How it works
 
+**Automated discovery flow:**
+
 ```
-Job URL ─────► Extraction ─────► Job Analysis (LLM) ─────► Tailoring (LLM) ─────► .docx
-               Scrape page        Themes, keywords,         Plan bullet             Styled
-               Extract fields     qualifications,           selection,              resume
-               Normalize text     domain signals            rewrite, order          document
+Discovery ──► Filtering ──► Bulk Extraction ──► Job Analysis (LLM) ──► Tailoring (LLM) ──► .docx
+Scrape boards  Salary/role   Fetch full page    Themes, keywords,      Plan bullet          Styled
+LinkedIn       filters       content (after     qualifications,        selection,           resume +
+Indeed                       filtering reduces   domain signals         rewrite, order       cover letter
+Greenhouse                   the set)
+Lever, etc.
+```
+
+**Manual single-URL flow:**
+
+```
+Job URL ──► Extraction ──► Job Analysis (LLM) ──► Tailoring (LLM) ──► .docx
+            Scrape page    Themes, keywords,       Plan bullet          Styled
+            Extract fields qualifications,         selection,           resume
+            Normalize text domain signals          rewrite, order       document
 ```
 
 **Extraction** fetches the page (HTTP first, Playwright fallback for JS-rendered sites), detects provider/source from the **resolved final URL** after redirects, parses structured metadata (JSON-LD, Open Graph), runs provider-specific selectors (LinkedIn, Greenhouse, Lever, Workday, Amazon, etc.), and falls back to generic content-block scoring. Structured metadata is treated as one candidate, not an automatic winner: visible rich sections (responsibilities/qualifications) can win when higher quality.
@@ -48,18 +61,25 @@ kokomoor-platform/
 │   ├── browser/             Playwright lifecycle: stealth, rate limiting, fingerprinting
 │   ├── fetch/               Shared HTML transport: HttpFetcher, BrowserFetcher, JSON-LD parsing
 │   ├── observability/       structlog + Prometheus metrics
-│   └── notifications/       Async SMTP email
+│   └── notifications/       Async SMTP email + IMAP heal reply watcher
 │
 ├── pipelines/
-│   └── job_agent/           Pipeline 1: Job Application Agent
+│   ├── job_agent/           Pipeline 1: Job Application Agent
 │       ├── graph.py         LangGraph state machine (full + manual flows)
 │       ├── state.py         Typed pipeline state
 │       ├── models/          JobListing (SQLModel), SearchCriteria, resume tailoring models
-│       ├── nodes/           Discovery → Filtering → Job Analysis → Tailoring → Tracking → Notification
+│       ├── nodes/           Discovery → Filtering → Bulk Extraction → Job Analysis → Tailoring → ...
+│       ├── discovery/       Browser + HTTP provider subsystem (LinkedIn, Indeed, Greenhouse, ...)
 │       ├── extraction/      Layered HTML scraping: JSON-LD, provider selectors, generic scoring
 │       ├── resume/          Profile loading, plan application, .docx rendering
+│       ├── cover_letter/    Cover letter generation, validation, .docx rendering
 │       ├── prompts/         Version-controlled LLM prompt templates
 │       └── tests/           Node-level tests with mocked LLM, no API calls
+│   └── scraper/             Pipeline 2: Universal Scraper
+│       ├── nodes/           scrape, validate, onboard, heal
+│       ├── wrappers/        Base wrapper + site-specific adapters
+│       ├── profiles/        SiteProfile YAML configs
+│       └── tests/           Offline fixture + contract + scale tests
 │
 ├── scripts/                 Manual pipeline entry points
 ├── alembic/                 Database migrations (shared)
@@ -129,7 +149,7 @@ ruff format core/ pipelines/
 # Type check
 mypy core/ pipelines/ --ignore-missing-imports
 
-# Test (80 tests, ~2s, no API calls)
+# Test (~270 tests, no API calls)
 pytest -v
 ```
 
@@ -152,6 +172,35 @@ Key settings:
 
 Job-analysis caching is keyed by `dedup_key + description hash`, so re-scraping the same URL with updated JD content will trigger a fresh analysis.
 
+## Discovery configuration
+
+The discovery subsystem scrapes job boards and public APIs to find relevant listings. Configure providers via `KP_*` environment variables in `.env`:
+
+**Provider enable flags:**
+
+| Variable | Default | Provider |
+|----------|---------|----------|
+| `KP_DISCOVERY_LINKEDIN_ENABLED` | `true` | LinkedIn (browser, requires credentials) |
+| `KP_DISCOVERY_INDEED_ENABLED` | `true` | Indeed (browser, no auth) |
+| `KP_DISCOVERY_BUILTIN_ENABLED` | `true` | Built In (browser, no auth) |
+| `KP_DISCOVERY_WELLFOUND_ENABLED` | `false` | Wellfound (browser, requires login) |
+| `KP_DISCOVERY_GREENHOUSE_ENABLED` | `true` | Greenhouse (HTTP API, no auth) |
+| `KP_DISCOVERY_LEVER_ENABLED` | `true` | Lever (HTTP API, no auth) |
+| `KP_DISCOVERY_WORKDAY_ENABLED` | `false` | Workday (browser, requires target list) |
+
+**Session persistence:** Browser sessions are stored in `data/sessions/` (gitignored). Established sessions dramatically reduce bot detection risk. LinkedIn sessions need 48-72h of warmup before reliable operation -- the first run may require manual CAPTCHA or email verification.
+
+**LinkedIn setup:** Set `KP_LINKEDIN_EMAIL` and `KP_LINKEDIN_PASSWORD`. The first run will create a session file. After manual verification (if prompted), subsequent runs reuse the stored session.
+
+**Greenhouse / Lever:** Set comma-separated company slugs: `KP_GREENHOUSE_TARGET_COMPANIES=anduril,palantir,scale-ai` and `KP_LEVER_TARGET_COMPANIES=openai,figma`. These use public JSON APIs and require no credentials.
+
+**CAPTCHA strategy:** `KP_CAPTCHA_STRATEGY` controls behavior when CAPTCHAs are encountered:
+- `avoid` (default behavior: skip the provider)
+- `pause_notify` (log warning, notify owner, skip provider for this run)
+- `solve` (submit to 2captcha API -- requires `KP_CAPTCHA_API_KEY`)
+
+**Concurrency:** `KP_DISCOVERY_MAX_CONCURRENT_PROVIDERS` (default 2) limits simultaneous browser contexts. `KP_DISCOVERY_MAX_PAGES_PER_SEARCH` (default 8) caps pagination depth per search URL.
+
 ## Future pipelines
 
 The platform is designed for multiple pipelines sharing `core/`:
@@ -160,6 +209,25 @@ The platform is designed for multiple pipelines sharing `core/`:
 - **Portfolio Manager** — GitHub profile and repo maintenance
 
 Each follows the same pattern: folder under `pipelines/`, imports from `core/`, own tests and Dockerfile.
+
+## Universal scraper quick run
+
+Run a live smoke test for any configured scraper site profile:
+
+```bash
+python -m pipelines.scraper.smoke_test --site-id indeed --query "software engineer" --location "Boston, MA"
+```
+
+Key scraper settings:
+- `KP_SCRAPER_PROFILES_DIR`
+- `KP_SCRAPER_FIXTURES_DIR`
+- `KP_SCRAPER_CONTENT_DIR`
+- `KP_SCRAPER_DEDUP_DB_PATH`
+
+Heal reply watcher settings:
+- `KP_IMAP_HOST`, `KP_IMAP_USERNAME`, `KP_IMAP_PASSWORD`
+- `KP_HEAL_TRIGGER_SIGNING_SECRET`
+- `KP_HEAL_TRIGGER_TOKEN_TTL_S`
 
 ## License
 

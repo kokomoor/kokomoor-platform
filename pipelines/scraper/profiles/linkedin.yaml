@@ -1,0 +1,68 @@
+site_id: linkedin
+display_name: LinkedIn Jobs
+base_url: https://www.linkedin.com
+requires_browser: true
+fixture_refresh_days: 7
+
+auth:
+  type: credential_form
+  login_url: https://www.linkedin.com/login
+  username_selector: "#username"
+  password_selector: "#password"
+  submit_selector: "button[type='submit']"
+  success_indicator: ".global-nav__me"
+  env_username_key: LINKEDIN_EMAIL
+  env_password_key: LINKEDIN_PASSWORD
+
+rate_limit:
+  min_delay_s: 3.0
+  max_delay_s: 8.0
+  pages_before_long_pause: 8
+  long_pause_min_s: 35.0
+  long_pause_max_s: 90.0
+
+navigation:
+  search_url_template: "https://www.linkedin.com/jobs/search/?keywords={query}&location={location}&f_TPR=r86400"
+  pagination: infinite_scroll
+
+selectors:
+  result_item: "div.job-search-card"
+  field_map:
+    title: "h3.base-search-card__title"
+    company: "h4.base-search-card__subtitle"
+    location: "span.job-search-card__location"
+    url: "a[href*='/jobs/']"
+  detail_link: "a[href*='/jobs/view/']"
+  detail_field_map:
+    description: "div.show-more-less-html__markup"
+    seniority: "span.description__job-criteria-text:nth-of-type(1)"
+    employment_type: "span.description__job-criteria-text:nth-of-type(2)"
+
+output_contract:
+  fields:
+    - name: title
+      type: str
+      required: true
+      description: Job title
+    - name: company
+      type: str
+      required: true
+      description: Hiring company name
+    - name: location
+      type: str
+      required: false
+      description: Job location
+    - name: url
+      type: url
+      required: true
+      description: Direct link to job posting
+    - name: description
+      type: str
+      required: false
+      description: Full job description text
+  dedup_fields:
+    - title
+    - company
+    - url
+  min_records_per_search: 3
+  max_empty_pages_before_stop: 2

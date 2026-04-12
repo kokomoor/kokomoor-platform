@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve project root relative to this file's location.
@@ -57,6 +57,15 @@ class Settings(BaseSettings):
         default=f"sqlite+aiosqlite:///{_PROJECT_ROOT / 'data' / 'platform.db'}",
         description="SQLAlchemy-style connection string. Default: local SQLite.",
     )
+    database_echo: bool = Field(
+        default=False,
+        description=(
+            "Emit raw SQL to stderr (SQLAlchemy ``echo``). Off by default — "
+            "the structured pipeline logs are usually more useful and the "
+            "echo stream floods them. Enable explicitly when debugging "
+            "schema or query issues."
+        ),
+    )
 
     # --- LLM (Anthropic) ---
     anthropic_api_key: SecretStr = Field(
@@ -64,11 +73,37 @@ class Settings(BaseSettings):
         description="Anthropic API key. Required for any LLM operations.",
     )
     anthropic_model: str = Field(
-        default="claude-sonnet-4-20250514",
-        description="Default Claude model for API calls.",
+        default="claude-sonnet-4-6",
+        description=(
+            "Default Claude model for API calls. Sonnet 4.6 is the current "
+            "recommended general-purpose model (Apr 2026)."
+        ),
     )
     anthropic_max_retries: int = Field(default=3, ge=1, le=10)
     anthropic_timeout_seconds: int = Field(default=120, ge=10)
+    llm_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description=(
+            "Max concurrent in-flight LLM requests per pipeline run. "
+            "Caps fan-out in the analysis/tailoring engines. Raising this "
+            "can speed up large runs but increases the chance of hitting "
+            "Anthropic rate limits. 1 = strictly sequential."
+        ),
+    )
+    llm_output_tokens_per_minute: int = Field(
+        default=10_000,
+        ge=1_000,
+        description=(
+            "Process-wide ceiling on output tokens reserved per rolling "
+            "60-second window. Should match the org's Anthropic per-minute "
+            "output-token quota. The TokenBucket throttle reserves each "
+            "call's max_tokens up front and blocks new calls until the "
+            "window has room — preventing the burst-then-429 pattern that "
+            "stalls a run for 65 s every time it hits the limit."
+        ),
+    )
 
     # --- Browser (Playwright) ---
     browser_headless: bool = Field(
@@ -112,6 +147,17 @@ class Settings(BaseSettings):
     log_json: bool = Field(
         default=True,
         description="Emit structured JSON logs (True) or human-readable (False).",
+    )
+    log_file_enabled: bool = Field(
+        default=True,
+        description=(
+            "Write logs to a rotating file in addition to stdout. "
+            "Files land in ``log_file_dir`` and rotate at 10 MB, keeping 7 backups."
+        ),
+    )
+    log_file_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "logs"),
+        description="Directory for rotating log files. Created automatically if absent.",
     )
     langsmith_api_key: SecretStr = Field(
         default=SecretStr(""),
@@ -177,7 +223,7 @@ class Settings(BaseSettings):
 
     # --- Cover Letter Tailoring ---
     cover_letter_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="claude-sonnet-4-6",
         description="Model for the cover-letter planning/generation pass.",
     )
     cover_letter_max_tokens: int = Field(
@@ -209,11 +255,262 @@ class Settings(BaseSettings):
         description="Enable optional critique pass for cover-letter generation.",
     )
 
+    # --- Tailoring Cost Control ---
+    tailoring_max_listings: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "Max listings to send through resume + cover-letter tailoring per run. "
+            "0 = no cap. The ranking node selects the top-N by fit score (see "
+            "``ranking_min_fit_score``) and marks the rest SKIPPED. Discovery and "
+            "job analysis still run on all listings so a future ranker has full data."
+        ),
+    )
+    ranking_min_fit_score: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum profile-coverage fit score required to reach tailoring. "
+            "Listings below this floor are marked SKIPPED even if they fit under "
+            "``tailoring_max_listings``. Raise this to be stricter about what "
+            "consumes expensive Sonnet cover-letter tokens; lower it in exploratory "
+            "runs where you still want to see weak matches."
+        ),
+    )
+
+    # --- Discovery Node ---
+    # Session persistence
+    discovery_sessions_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "sessions"),
+        description="Directory for browser session storage_state JSON files (gitignored).",
+    )
+
+    # Concurrency
+    discovery_max_concurrent_providers: int = Field(
+        default=2,
+        ge=1,
+        le=6,
+        description="Max browser providers running simultaneously (each uses one Playwright context).",
+    )
+    discovery_max_pages_per_search: int = Field(
+        default=8,
+        ge=1,
+        le=30,
+        description="Max search result pages to paginate per keyword/provider combination.",
+    )
+    discovery_max_listings_per_provider: int = Field(
+        default=150,
+        ge=10,
+        description="Hard cap on listings collected per provider per run.",
+    )
+    discovery_session_max_age_hours: int = Field(
+        default=72,
+        ge=1,
+        description="Treat saved session as stale if older than this many hours.",
+    )
+
+    # LinkedIn credentials
+    linkedin_email: str = Field(
+        default="", description="LinkedIn account email for job search login."
+    )
+    linkedin_password: SecretStr = Field(
+        default=SecretStr(""),
+        description="LinkedIn account password. Never logged.",
+    )
+    wellfound_email: str = Field(
+        default="",
+        description="Wellfound account email for job search login.",
+    )
+    wellfound_password: SecretStr = Field(
+        default=SecretStr(""),
+        description="Wellfound account password. Never logged.",
+    )
+
+    # Target company lists for ATS providers (comma-separated slugs).
+    # Defaults seed a starter set of well-known AI/defence/infra companies
+    # that publish jobs on these boards so the providers actually run on a
+    # fresh install. The orchestrator silently skips Greenhouse/Lever when
+    # the list is empty, so the previous default of "" left both providers
+    # disabled-by-default even though their enable flags were True.
+    greenhouse_target_companies: str = Field(
+        default=(
+            "anduril,scale-ai,databricks,airbnb,robinhood,rippling,plaid,"
+            "instacart,doordash,brex,gusto,affirm,coinbase,reddit,figma,"
+            "canva,notion,chime,stripe,ramp,mercury,vanta,retool"
+        ),
+        description="Comma-separated Greenhouse company board slugs.",
+    )
+    lever_target_companies: str = Field(
+        default=(
+            "anthropic,palantir,benchling,cresta,impira,inflection-ai,"
+            "rec-room,attentive,1password,clipboardhealth,fivetran,checkr,"
+            "lattice,replit,vercel,linear,crusoeenergy,cohere"
+        ),
+        description="Comma-separated Lever company slugs.",
+    )
+    workday_target_companies: str = Field(
+        default="",
+        description="Comma-separated 'company:subdomain' pairs for Workday (e.g. 'Anduril:anduril').",
+    )
+    direct_site_configs: str = Field(
+        default="",
+        description="Path to YAML file defining direct career-site scrape targets. Optional.",
+    )
+
+    # CAPTCHA handling
+    captcha_strategy: Literal["avoid", "pause_notify", "solve"] = Field(
+        default="pause_notify",
+        description="CAPTCHA response strategy. 'solve' requires captcha_api_key.",
+    )
+    captcha_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="2captcha/anticaptcha API key. Only used when captcha_strategy='solve'.",
+    )
+
+    # Pre-filter
+    discovery_prefilter_min_score: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum rule-based fit score for a raw discovery ref to survive "
+            "into bulk_extraction + job_analysis. 0.0 disables the gate and "
+            "sends every ref through the expensive chain; 0.25 (default) drops "
+            "listings with no role, keyword, company, or location match at all."
+        ),
+    )
+    discovery_debug_capture_enabled: bool = Field(
+        default=False,
+        description="Capture screenshots/HTML/metadata for discovery failures.",
+    )
+    discovery_debug_capture_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "debug_captures"),
+        description="Directory for discovery failure-capture artifacts.",
+    )
+    discovery_debug_capture_html: bool = Field(
+        default=True,
+        description="Include HTML snapshots in discovery failure captures.",
+    )
+
+    # Provider enable flags
+    # --- Filtering ---
+    filter_allow_unknown_salary: bool = Field(
+        default=True,
+        description=(
+            "When True (default), listings with no posted salary bypass the "
+            "floor and reach tailoring. When False, missing-salary listings "
+            "are dropped — useful if you want to enforce a hard floor and "
+            "trust that desirable roles publish compensation bands."
+        ),
+    )
+
+    discovery_linkedin_enabled: bool = Field(default=True)
+    discovery_indeed_enabled: bool = Field(default=True)
+    discovery_builtin_enabled: bool = Field(default=True)
+    discovery_wellfound_enabled: bool = Field(default=False, description="Requires login.")
+    discovery_greenhouse_enabled: bool = Field(default=True)
+    discovery_lever_enabled: bool = Field(default=True)
+    discovery_workday_enabled: bool = Field(
+        default=False, description="Requires target company list."
+    )
+
+    # --- Scraper Pipeline ---
+    scraper_dedup_db_path: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "scraper_dedup.db"),
+        description="SQLite database for scraper deduplication.",
+    )
+    scraper_dedup_ttl_days: int = Field(
+        default=90, ge=1, description="Days before pruning old dedup keys."
+    )
+    scraper_content_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "scraper_content"),
+        description="Base directory for JSONL content store.",
+    )
+    scraper_fixtures_dir: str = Field(
+        default=str(_PROJECT_ROOT / "pipelines" / "scraper" / "fixtures"),
+        description="Base directory for site fixture snapshots.",
+    )
+    scraper_profiles_dir: str = Field(
+        default=str(_PROJECT_ROOT / "pipelines" / "scraper" / "profiles"),
+        description="Base directory for site profile YAML files.",
+    )
+
+    # --- Self-Healing ---
+    heal_reports_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "heal_reports"),
+        description="Directory for heal diagnosis reports.",
+    )
+    heal_max_tokens: int = Field(
+        default=500_000, ge=10_000, description="Token budget for heal remediation."
+    )
+    heal_max_retries_per_step: int = Field(
+        default=3, ge=1, le=10, description="Max retries per remediation step."
+    )
+    heal_max_wall_clock_minutes: int = Field(
+        default=30, ge=5, description="Wall-clock cap for heal remediation."
+    )
+    heal_diagnosis_model: str = Field(
+        default="claude-sonnet-4-6",
+        description="Model for heal diagnosis pass.",
+    )
+    heal_remediation_model: str = Field(
+        default="claude-sonnet-4-6",
+        description="Model for heal remediation agent.",
+    )
+
+    # --- IMAP (heal reply watching) ---
+    imap_host: str = Field(default="", description="IMAP server for heal reply watching.")
+    imap_port: int = Field(default=993, description="IMAP port (993 for SSL).")
+    imap_username: str = Field(default="", description="IMAP username.")
+    imap_password: SecretStr = Field(default=SecretStr(""), description="IMAP password.")
+    heal_reply_poll_interval_s: int = Field(
+        default=300, ge=30, description="Seconds between inbox polls for heal replies."
+    )
+    heal_trigger_signing_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="HMAC secret used to sign and verify heal reply trigger tokens.",
+    )
+    heal_trigger_token_ttl_s: int = Field(
+        default=86_400,
+        ge=60,
+        description="Maximum age (seconds) for a heal reply trigger token.",
+    )
+    heal_reply_allowed_senders: str = Field(
+        default="",
+        description="Comma-separated allowed sender email addresses for heal replies.",
+    )
+
     # --- Feature Flags ---
     enable_browser_stealth: bool = Field(
         default=True,
         description="Enable anti-detection measures in Playwright.",
     )
+
+    # --- Validators ---
+
+    @field_validator(
+        "resume_master_profile_path",
+        "cover_letter_style_guide_path",
+        mode="before",
+    )
+    @classmethod
+    def _resolve_relative_paths(cls, v: object) -> object:
+        """Resolve relative file paths against the project root.
+
+        When a path is configured as a relative string (e.g. in a .env file),
+        Python resolves it against the *current working directory* at the time
+        Path() is evaluated — which varies depending on how the process is
+        launched (cron, IDE, script, etc.). This validator normalises any
+        relative path to an absolute one anchored at the project root so that
+        behaviour is consistent regardless of CWD.
+        """
+        if not isinstance(v, str):
+            return v
+        p = Path(v)
+        if not p.is_absolute():
+            p = _PROJECT_ROOT / p
+        return str(p)
 
     @property
     def is_dev(self) -> bool:
@@ -229,6 +526,21 @@ class Settings(BaseSettings):
     def has_langsmith_key(self) -> bool:
         """Check if LangSmith tracing is configured."""
         return bool(self.langsmith_api_key.get_secret_value())
+
+    @property
+    def greenhouse_company_list(self) -> list[str]:
+        """Parse greenhouse_target_companies into a list of slugs."""
+        return [s.strip() for s in self.greenhouse_target_companies.split(",") if s.strip()]
+
+    @property
+    def lever_company_list(self) -> list[str]:
+        """Parse lever_target_companies into a list of slugs."""
+        return [s.strip() for s in self.lever_target_companies.split(",") if s.strip()]
+
+    @property
+    def workday_company_list(self) -> list[str]:
+        """Parse workday_target_companies into a list of 'Name:subdomain[:wdN]' entries."""
+        return [s.strip() for s in self.workday_target_companies.split(",") if s.strip()]
 
 
 @lru_cache(maxsize=1)

@@ -16,7 +16,10 @@ from pipelines.job_agent.cover_letter.profile import (
     format_cover_letter_inventory,
     load_cover_letter_style_guide,
 )
-from pipelines.job_agent.cover_letter.prompting import build_cover_letter_prompt
+from pipelines.job_agent.cover_letter.prompting import (
+    build_cover_letter_prompt,
+    build_cover_letter_system,
+)
 from pipelines.job_agent.cover_letter.renderer import render_cover_letter_docx
 from pipelines.job_agent.cover_letter.validation import validate_cover_letter_plan
 from pipelines.job_agent.models import ApplicationStatus
@@ -49,6 +52,7 @@ class _Runtime:
     output_dir: Path
     style_guide: str
     prompt_template: str
+    cached_system: str
     profile: ResumeMasterProfile
     normalized_plans: dict[str, CoverLetterPlan] = field(default_factory=dict)
 
@@ -85,6 +89,8 @@ def _build_spec() -> TailoringSpec[
         on_item_success=_on_item_success,
         on_item_error=_on_item_error,
         on_complete=_on_complete,
+        build_cached_system=lambda _state, runtime: runtime.cached_system,
+        concurrency=get_settings().llm_max_concurrency,
     )
 
 
@@ -110,12 +116,17 @@ def _prepare_runtime(state: JobAgentState) -> _Runtime:
     output_dir.mkdir(parents=True, exist_ok=True)
     style_guide = load_cover_letter_style_guide(Path(settings.cover_letter_style_guide_path))
     prompt_template = (_PROMPTS_DIR / "tailor_cover_letter_plan.md").read_text(encoding="utf-8")
+    system_template = (_PROMPTS_DIR / "tailor_cover_letter_system.md").read_text(encoding="utf-8")
+    cached_system = build_cover_letter_system(
+        system_template=system_template, style_guide=style_guide
+    )
     profile = load_master_profile(Path(settings.resume_master_profile_path))
     return _Runtime(
         settings=settings,
         output_dir=output_dir,
         style_guide=style_guide,
         prompt_template=prompt_template,
+        cached_system=cached_system,
         profile=profile,
     )
 
@@ -179,7 +190,6 @@ def _build_prompt(
         job_description=listing.description[: runtime.settings.cover_letter_max_input_chars],
         job_analysis=analysis,
         inventory_view=inventory_view,
-        style_guide=runtime.style_guide,
         positioning_rules=positioning_rules(analysis.domain_tags),
     )
 

@@ -111,7 +111,7 @@ def _patch_settings(tmp_path: Path) -> None:
     os.environ["KP_COVER_LETTER_OUTPUT_DIR"] = str(tmp_path / "cover_letters")
     os.environ["KP_COVER_LETTER_MAX_TOKENS"] = "2200"
     os.environ["KP_COVER_LETTER_MAX_INPUT_CHARS"] = "12000"
-    os.environ["KP_COVER_LETTER_MODEL"] = "claude-sonnet-4-20250514"
+    os.environ["KP_COVER_LETTER_MODEL"] = "claude-sonnet-4-6"
     os.environ["KP_COVER_LETTER_STYLE_GUIDE_PATH"] = str(
         Path("pipelines/job_agent/context/cover_letter_style.md")
     )
@@ -273,8 +273,8 @@ def test_validation_applies_preferred_signoff() -> None:
     assert result.plan.signoff == "Sincerely,"
 
 
-def test_validation_warns_on_missing_company_in_body() -> None:
-    """Company missing from letter body produces a warning."""
+def test_validation_rejects_missing_company_in_body() -> None:
+    """Company missing from the letter body is now a hard failure."""
     from pipelines.job_agent.cover_letter.models import CoverLetterPlan
 
     profile = load_master_profile(_FIXTURES_DIR / "master_profile.yaml")
@@ -288,12 +288,12 @@ def test_validation_warns_on_missing_company_in_body() -> None:
         "deployable autonomy products at this company."
     )
 
-    result = validate_cover_letter_plan(
-        plan=plan,
-        profile=profile,
-        expected_company="Anduril Industries",
-    )
-    assert any("body does not mention" in w for w in result.warnings)
+    with pytest.raises(ValueError, match="body does not mention"):
+        validate_cover_letter_plan(
+            plan=plan,
+            profile=profile,
+            expected_company="Anduril Industries",
+        )
 
 
 def test_renderer_layout_order(tmp_path: Path) -> None:

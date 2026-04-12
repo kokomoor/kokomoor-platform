@@ -16,16 +16,29 @@ def build_cover_letter_prompt(
     job_description: str,
     job_analysis: JobAnalysisResult,
     inventory_view: str,
-    style_guide: str,
     positioning_rules: str = "",
 ) -> str:
-    """Build one-pass prompt from template + style/context data."""
+    """Build the per-listing user prompt from the variable-content template.
+
+    The static portion (objectives, style guide, tone rules, hard
+    requirements) lives in the cached system prompt composed by the
+    cover-letter node — it does not appear here.
+    """
     return template.format(
         job_title=job_title,
         company=company,
         job_description=job_description,
         job_analysis=job_analysis.model_dump_json(indent=2),
         candidate_inventory=inventory_view,
-        style_guide=style_guide,
         positioning_rules=positioning_rules,
     )
+
+
+def build_cover_letter_system(*, system_template: str, style_guide: str) -> str:
+    """Render the static cover-letter system prompt once per run.
+
+    Must be byte-identical across every call within the run for the
+    Anthropic prefix cache to hit. Do not embed timestamps or per-item
+    data here.
+    """
+    return system_template.format(style_guide=style_guide)

@@ -61,7 +61,36 @@ def _build_spec() -> StructuredAnalysisSpec[JobAgentState, JobListing, JobAnalys
         on_item_result=_on_item_result,
         on_item_error=_on_item_error,
         on_complete=_on_complete,
+        # The instructions block of the analysis prompt is identical
+        # across listings; mark it as the cacheable system prefix so the
+        # JobAnalysisResult schema (folded in by structured_complete when
+        # cache_system=True) plus these instructions form a stable cache
+        # prefix. Without this every Haiku call paid full prefill cost.
+        build_cached_system=lambda _state, runtime: _ANALYSIS_SYSTEM,
+        concurrency=get_settings().llm_max_concurrency,
     )
+
+
+_ANALYSIS_SYSTEM = (
+    "You analyse job listings and produce a structured JobAnalysisResult.\n\n"
+    "Focus on what the employer values most. Read the entire description "
+    "including qualifications sections and follow these rules:\n"
+    "- Identify the top 3-5 themes the employer cares about most "
+    '(e.g. "autonomous systems", "cross-functional leadership").\n'
+    "- Determine the seniority level: one of junior, mid, senior, lead, "
+    "staff, director.\n"
+    "- Extract domain tags that describe the role's industry/field "
+    '(e.g. "defense", "ml", "startup", "energy").\n'
+    "- List 5-10 must-hit keywords for ATS matching — terms that appear in "
+    "the JD or are strongly implied.\n"
+    "- Identify the top priority requirements from the job description.\n"
+    "- Extract basic/minimum qualifications (education, years of experience, "
+    'required skills). If not explicitly labeled, infer from "requirements" '
+    'or "what you need" sections.\n'
+    "- Extract preferred/nice-to-have qualifications separately. If the "
+    "listing does not distinguish basic from preferred, leave preferred empty.\n"
+    "- Suggest 3-5 positioning angles for a candidate applying to this role.\n"
+)
 
 
 async def job_analysis_node(

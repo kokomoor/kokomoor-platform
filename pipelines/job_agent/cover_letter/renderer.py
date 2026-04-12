@@ -62,6 +62,17 @@ def render_cover_letter_docx(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(output_path))
     logger.info("cover_letter.rendered", path=str(output_path))
+
+    preview_path = output_path.with_suffix(".md")
+    _render_markdown_preview(
+        doc,
+        preview_path,
+        sender_name=sender_name,
+        sender_location=sender_location,
+        sender_email=sender_email,
+        sender_phone=sender_phone,
+    )
+
     return output_path
 
 
@@ -103,3 +114,47 @@ def _zero_spacing(para: Any) -> None:
     para.paragraph_format.space_before = Pt(0)
     para.paragraph_format.space_after = Pt(0)
     para.paragraph_format.line_spacing = 1.15
+
+
+# -- markdown preview ------------------------------------------------------
+
+
+def _render_markdown_preview(
+    doc: CoverLetterDocument,
+    path: Path,
+    *,
+    sender_name: str,
+    sender_location: str,
+    sender_email: str,
+    sender_phone: str,
+) -> None:
+    """Write a Markdown preview of the cover letter alongside the .docx."""
+    lines: list[str] = []
+
+    lines.append(f"**{sender_name}**")
+    contact = " | ".join(p for p in [sender_location, sender_email, sender_phone] if p)
+    if contact:
+        lines.append(f"_{contact}_")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    lines.append(doc.salutation)
+    lines.append("")
+    lines.append(doc.opening_paragraph)
+    lines.append("")
+    for para in doc.body_paragraphs:
+        lines.append(para)
+        lines.append("")
+    lines.append(doc.closing_paragraph)
+    lines.append("")
+    lines.append(doc.signoff)
+    lines.append("")
+    lines.append(doc.signature_name)
+    lines.append("")
+
+    try:
+        path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("cover_letter_preview_rendered", path=str(path))
+    except Exception:
+        logger.warning("cover_letter_preview_failed", path=str(path), exc_info=True)

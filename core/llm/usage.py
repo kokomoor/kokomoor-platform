@@ -5,17 +5,29 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# Approximate pricing per 1M tokens (as of early 2026). Update as needed.
+# Approximate pricing per 1M tokens (as of early 2026). Keep the older
+# ``-20250514`` IDs for historical logs that still reference them so
+# rolled-up cost summaries stay accurate across model upgrades.
 _COST_PER_1M_INPUT: dict[str, float] = {
+    "claude-sonnet-4-6": 3.00,
     "claude-sonnet-4-20250514": 3.00,
+    "claude-opus-4-6": 15.00,
     "claude-opus-4-20250514": 15.00,
     "claude-haiku-4-5-20251001": 0.80,
 }
 _COST_PER_1M_OUTPUT: dict[str, float] = {
+    "claude-sonnet-4-6": 15.00,
     "claude-sonnet-4-20250514": 15.00,
+    "claude-opus-4-6": 75.00,
     "claude-opus-4-20250514": 75.00,
     "claude-haiku-4-5-20251001": 4.00,
 }
+
+
+# Cache tokens: reads are billed at 10% of base input; writes at 125%
+# (one-time, 5-minute TTL). We assume the same ratios across models.
+_CACHE_READ_MULTIPLIER = 0.10
+_CACHE_WRITE_MULTIPLIER = 1.25
 
 
 @dataclass

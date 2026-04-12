@@ -26,24 +26,39 @@ class TestSalaryFilter:
     """Tests for salary filtering logic."""
 
     def test_above_floor(self) -> None:
-        assert _passes_salary_filter(_make_listing(salary_min=200_000), 170_000) is True
+        assert (
+            _passes_salary_filter(_make_listing(salary_min=200_000), 170_000, allow_unknown=False)
+            is True
+        )
 
     def test_below_floor(self) -> None:
         assert (
-            _passes_salary_filter(_make_listing(salary_min=100_000, salary_max=120_000), 170_000)
+            _passes_salary_filter(
+                _make_listing(salary_min=100_000, salary_max=120_000),
+                170_000,
+                allow_unknown=False,
+            )
             is False
         )
 
     def test_max_above_floor(self) -> None:
         """If max salary meets floor, listing passes."""
         assert (
-            _passes_salary_filter(_make_listing(salary_min=150_000, salary_max=200_000), 170_000)
+            _passes_salary_filter(
+                _make_listing(salary_min=150_000, salary_max=200_000),
+                170_000,
+                allow_unknown=False,
+            )
             is True
         )
 
-    def test_no_salary_passes(self) -> None:
-        """Listings without salary info are let through for manual review."""
-        assert _passes_salary_filter(_make_listing(), 170_000) is True
+    def test_no_salary_default_passes(self) -> None:
+        """Listings without salary info pass through by default."""
+        assert _passes_salary_filter(_make_listing(), 170_000, allow_unknown=True) is True
+
+    def test_no_salary_excluded_when_allow_unknown_false(self) -> None:
+        """Listings without salary are dropped when ``allow_unknown=False``."""
+        assert _passes_salary_filter(_make_listing(), 170_000, allow_unknown=False) is False
 
 
 class TestFilteringNode:

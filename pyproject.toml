@@ -35,6 +35,9 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "python-dotenv>=1.0.0",
     "tenacity>=9.0.0",
+    # Scraper pipeline
+    "mmh3>=4.0.0",
+    "aioimaplib>=2.0.0",
 ]
 
 [project.optional-dependencies]

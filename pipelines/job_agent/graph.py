@@ -19,12 +19,15 @@ import structlog
 from langgraph.graph import END
 from langgraph.graph.state import CompiledStateGraph, StateGraph
 
+from pipelines.job_agent.models import ApplicationStatus
+from pipelines.job_agent.nodes.bulk_extraction import bulk_extraction_node
 from pipelines.job_agent.nodes.cover_letter_tailoring import cover_letter_tailoring_node
 from pipelines.job_agent.nodes.discovery import discovery_node
 from pipelines.job_agent.nodes.filtering import filtering_node
 from pipelines.job_agent.nodes.job_analysis import job_analysis_node
 from pipelines.job_agent.nodes.manual_extraction import manual_extraction_node
 from pipelines.job_agent.nodes.notification import notification_node
+from pipelines.job_agent.nodes.ranking import ranking_node
 from pipelines.job_agent.nodes.tailoring import tailoring_node
 from pipelines.job_agent.nodes.tracking import tracking_node
 from pipelines.job_agent.state import JobAgentState
@@ -38,9 +41,25 @@ logger = structlog.get_logger(__name__)
 
 
 def _should_continue_after_filtering(state: JobAgentState) -> str:
-    """Route after filtering: proceed to job_analysis or skip to notification."""
+    """Route after filtering: proceed to bulk_extraction or skip to notification."""
     if not state.qualified_listings:
         logger.info("no_qualified_listings", total_discovered=len(state.discovered_listings))
+        return "notification"
+    return "bulk_extraction"
+
+
+def _should_continue_after_bulk_extraction(state: JobAgentState) -> str:
+    """Route after bulk extraction: proceed if any listing has a description."""
+    extractable = [
+        listing
+        for listing in state.qualified_listings
+        if listing.status != ApplicationStatus.ERRORED and listing.description
+    ]
+    if not extractable:
+        logger.info(
+            "bulk_extraction_all_failed",
+            total=len(state.qualified_listings),
+        )
         return "notification"
     return "job_analysis"
 
@@ -54,11 +73,11 @@ def _should_continue_after_manual_extraction(state: JobAgentState) -> str:
 
 
 def _should_continue_after_job_analysis(state: JobAgentState) -> str:
-    """Route after job analysis: tailor if at least one analysis succeeded."""
+    """Route after job analysis: rank+tailor if at least one analysis succeeded."""
     if not state.job_analyses:
         logger.info("job_analysis_empty", errors=len(state.errors))
         return "notification"
-    return "tailoring"
+    return "ranking"
 
 
 def _llm_node_wrapper(
@@ -89,12 +108,12 @@ def build_graph(
 
     The graph implements this flow::
 
-        START → discovery → filtering → job_analysis → tailoring
-              → cover_letter_tailoring
+        START → discovery → filtering → bulk_extraction → job_analysis
+              → tailoring → cover_letter_tailoring
               → tracking → notification → END
 
     With conditional edges that skip stages when there's nothing to
-    process (e.g., no qualified listings skip job_analysis entirely).
+    process (e.g., no qualified listings skip to notification).
     """
     graph: StateGraph[JobAgentState, None, JobAgentState, JobAgentState] = StateGraph(
         JobAgentState,
@@ -102,6 +121,7 @@ def build_graph(
 
     graph.add_node("discovery", discovery_node)
     graph.add_node("filtering", filtering_node)
+    graph.add_node("bulk_extraction", bulk_extraction_node)
     graph.add_node(
         "job_analysis",
         cast(Any, _llm_node_wrapper(job_analysis_node, llm_client=llm_client)),  # noqa: TC006
@@ -117,6 +137,7 @@ def build_graph(
             _llm_node_wrapper(cover_letter_tailoring_node, llm_client=llm_client),
         ),
     )
+    graph.add_node("ranking", ranking_node)
     graph.add_node("tracking", tracking_node)
     graph.add_node("notification", notification_node)
 
@@ -127,6 +148,15 @@ def build_graph(
         "filtering",
         _should_continue_after_filtering,
         {
+            "bulk_extraction": "bulk_extraction",
+            "notification": "notification",
+        },
+    )
+
+    graph.add_conditional_edges(
+        "bulk_extraction",
+        _should_continue_after_bulk_extraction,
+        {
             "job_analysis": "job_analysis",
             "notification": "notification",
         },
@@ -136,10 +166,12 @@ def build_graph(
         "job_analysis",
         _should_continue_after_job_analysis,
         {
-            "tailoring": "tailoring",
+            "ranking": "ranking",
             "notification": "notification",
         },
     )
+
+    graph.add_edge("ranking", "tailoring")
 
     graph.add_edge("tailoring", "cover_letter_tailoring")
     graph.add_edge("cover_letter_tailoring", "tracking")
@@ -196,7 +228,7 @@ def build_manual_graph(
         "job_analysis",
         _should_continue_after_job_analysis,
         {
-            "tailoring": "tailoring",
+            "ranking": "tailoring",  # manual graph skips ranking, goes straight to tailoring
             "notification": "notification",
         },
     )

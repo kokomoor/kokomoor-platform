@@ -27,6 +27,7 @@ class LLMClient(Protocol):
         temperature: float = 0.0,
         model: str | None = None,
         run_id: str = "",
+        cache_system: bool = False,
     ) -> str:
         """Send a completion request and return the assistant text.
 
@@ -37,5 +38,7 @@ class LLMClient(Protocol):
             temperature: Sampling temperature (0.0 = deterministic).
             model: Override the default model for this call.
             run_id: Pipeline run identifier for log correlation.
+            cache_system: If True, mark the ``system`` prompt as a
+                cacheable prefix so it can be reused across calls.
         """
         ...
