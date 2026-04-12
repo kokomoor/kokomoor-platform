@@ -22,19 +22,24 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import importlib
 import math
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import structlog
 
 from core.scraper.path_safety import validate_site_id
 
-try:
-    import mmh3
-except ImportError:
-    mmh3 = None
+# Optional C-extension for fast hashing; falls back to hashlib when absent.
+# Loaded via importlib to avoid a module-level redefinition that strict mypy
+# would flag as [no-redef] when the package is installed.
+mmh3: Any = None
+with contextlib.suppress(ImportError):
+    mmh3 = importlib.import_module("mmh3")
 
 logger = structlog.get_logger(__name__)
 
