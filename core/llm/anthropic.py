@@ -51,9 +51,9 @@ def _adaptive_wait(retry_state: RetryCallState) -> float:
     attempt = retry_state.attempt_number  # 1-based
     if isinstance(exc, anthropic.RateLimitError):
         # 65 → 130 → 260 → 300 … seconds
-        return min(65.0 * (2 ** (attempt - 1)), 300.0)
+        return min(65.0 * float(2 ** (attempt - 1)), 300.0)
     # Transient connection errors: 2 → 4 → 8 … seconds (capped at 30)
-    return min(2.0 * (2 ** (attempt - 1)), 30.0)
+    return min(2.0 * float(2 ** (attempt - 1)), 30.0)
 
 
 class AnthropicClient:
