@@ -121,6 +121,11 @@ async def tracking_node(state: JobAgentState) -> JobAgentState:
         discovered=len(state.discovered_listings),
         qualified=len(state.qualified_listings),
         tailored=len(state.tailored_listings),
+        application_attempts=len(state.application_results),
+        application_submitted=sum(1 for a in state.application_results if a.status == "submitted"),
+        application_awaiting_review=sum(
+            1 for a in state.application_results if a.status == "awaiting_review"
+        ),
     )
     return state
 
@@ -162,6 +167,19 @@ async def _write_pipeline_run(session: AsyncSession, state: JobAgentState, upser
         "discovered": len(state.discovered_listings),
         "qualified": len(state.qualified_listings),
         "tailored": sum(1 for li in state.tailored_listings if li.tailored_resume_path is not None),
+        "application_attempts": len(state.application_results),
+        "application_submitted": sum(
+            1 for attempt in state.application_results if attempt.status == "submitted"
+        ),
+        "application_awaiting_review": sum(
+            1 for attempt in state.application_results if attempt.status == "awaiting_review"
+        ),
+        "application_stuck": sum(
+            1 for attempt in state.application_results if attempt.status == "stuck"
+        ),
+        "application_errors": sum(
+            1 for attempt in state.application_results if attempt.status == "error"
+        ),
         "upserted_listings": upserted,
         "error_count": len(state.errors),
     }

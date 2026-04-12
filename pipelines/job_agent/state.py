@@ -13,10 +13,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pipelines.job_agent.models import JobListing, SearchCriteria
 from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult  # noqa: TC001
+
+if TYPE_CHECKING:
+    from pipelines.job_agent.application.models import ApplicationAttempt
 
 
 class PipelinePhase(StrEnum):
@@ -70,6 +73,7 @@ class JobAgentState:
 
     # Tailoring → Tracking
     tailored_listings: list[JobListing] = field(default_factory=list)
+    application_results: list[ApplicationAttempt] = field(default_factory=list)
 
     # Error tracking
     errors: list[dict[str, str]] = field(default_factory=list)

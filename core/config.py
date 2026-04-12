@@ -255,6 +255,33 @@ class Settings(BaseSettings):
         description="Enable optional critique pass for cover-letter generation.",
     )
 
+    # --- Application Engine ---
+    candidate_application_profile_path: str = Field(
+        default=str(
+            _PROJECT_ROOT / "pipelines" / "job_agent" / "context" / "candidate_application.yaml"
+        ),
+        description="Path to the candidate application profile YAML.",
+    )
+    application_max_per_run: int = Field(
+        default=5,
+        ge=0,
+        description="Max applications to attempt per run. 0 = no cap.",
+    )
+    application_require_human_review: bool = Field(
+        default=True,
+        description="Pause at submit for human review instead of auto-submitting.",
+    )
+    application_linkedin_daily_cap: int = Field(
+        default=25,
+        ge=1,
+        description="Max LinkedIn Easy Apply submissions per day per account.",
+    )
+    application_min_delay_seconds: float = Field(
+        default=60.0,
+        ge=10.0,
+        description="Minimum seconds between application attempts.",
+    )
+
     # --- Tailoring Cost Control ---
     tailoring_max_listings: int = Field(
         default=5,
