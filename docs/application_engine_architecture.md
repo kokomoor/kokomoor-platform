@@ -1534,3 +1534,1053 @@ The application engine is working when:
 5. The whole thing runs within the existing pipeline — `python -m
    pipelines.job_agent` goes from discovery to application submission
    in one invocation.
+
+---
+
+## Implementation prompts — sequential build plan for a coding model
+
+Everything below is a **ready-to-execute prompt sequence** for a flagship
+coding model (Claude Code Opus, Codex, etc.). Each prompt is
+self-contained: it names the files to read, the files to write, the
+invariants to respect, and the CI gates that must stay green. A model
+with internet access and this repository (including every `AGENTS.md`)
+should be able to execute these in order and land the complete
+application engine.
+
+### How to use these prompts
+
+1. Feed the prompts **in numbered order**. Each one builds on the
+   previous. Do not skip ahead — later prompts depend on types,
+   fixtures, and config flags introduced earlier.
+2. Between prompts, run the full CI gate locally:
+
+   ```bash
+   ruff check core/ pipelines/
+   ruff format --check core/ pipelines/
+   mypy core/ pipelines/ --ignore-missing-imports
+   pytest --cov=core --cov=pipelines --cov-report=term-missing -x
+   ```
+
+   If any check fails, fix it before continuing. **Do not** skip
+   hooks or silence mypy with `# type: ignore` unless the type error
+   is genuinely in third-party code; `warn_unused_ignores = true` is
+   set in `pyproject.toml` and will punish stale ignores.
+3. Each prompt should land as **one focused commit** (or PR, if
+   working on a branch). The commit message should name the component
+   and reference the prompt number, e.g. `feat(application): prompt 03
+   — greenhouse API submitter`.
+4. Invariants that hold for **every** prompt (do not violate, do not
+   mention being reminded of them):
+   - Never auto-submit applications without `application_require_human_review=False`
+     being an explicit, logged decision. Defaults must pause at the
+     submit button.
+   - Never hit a real employer endpoint from a unit test. All network
+     and browser interactions in tests must be mocked or use the
+     fixture pages shipped under `pipelines/job_agent/tests/fixtures/`.
+   - Never store API keys, session cookies, or PII in source control.
+     Session stores live under `data/sessions/` and are gitignored.
+   - Never rebuild infrastructure the repo already provides. Compose
+     `BrowserManager`, `BrowserActions`, `PageObserver`,
+     `WebAgentController`, `HumanBehavior`, `SessionStore`,
+     `HttpFetcher`, `DedupEngine`, `structured_complete`, and
+     `AnthropicClient` — do not fork them.
+   - Never widen public types to `Any` to escape mypy. Add a precise
+     type or a targeted `cast`.
+   - All new user-facing fields must go through `core.config.Settings`
+     (prefixed `KP_`), not module-level constants.
+5. Before any prompt touches a file in `core/`, re-read
+   `core/AGENTS.md` and the relevant subdirectory's `AGENTS.md`
+   (`core/browser/AGENTS.md`, `core/web_agent/AGENTS.md`). Before
+   touching `pipelines/job_agent/`, re-read
+   `pipelines/job_agent/AGENTS.md`. Those files encode conventions the
+   architecture doc assumes but does not restate.
+
+---
+
+### Prompt 00 — Orient and establish a baseline
+
+**Goal:** Read the architecture doc, understand the existing
+infrastructure, and prove the baseline CI is green before touching
+anything.
+
+**Read first:**
+- `docs/application_engine_architecture.md` (this document, in full)
+- `core/AGENTS.md`, `core/browser/AGENTS.md`, `core/web_agent/AGENTS.md`,
+  `pipelines/job_agent/AGENTS.md`
+- `pipelines/job_agent/graph.py`, `pipelines/job_agent/state.py`,
+  `pipelines/job_agent/models/__init__.py`
+- `pipelines/job_agent/application/` — every file
+- `core/web_agent/controller.py`, `core/web_agent/protocol.py`,
+  `core/web_agent/context.py`
+- `core/browser/observer.py`, `core/browser/actions.py`,
+  `core/browser/human_behavior.py`, `core/browser/session.py`
+- `core/llm/structured.py`, `core/llm/anthropic.py`, `core/llm/protocol.py`
+- `pipelines/job_agent/context/candidate_profile.yaml`
+- `core/config.py`
+- `.github/workflows/ci.yml`
+- `pyproject.toml` (especially `[tool.mypy]`, `[tool.ruff]`,
+  `[tool.pytest.ini_options]`, and dependencies)
+
+**What to produce:**
+- A short summary (≤ 300 words) in your scratch output — do NOT
+  commit it — covering: (a) which infrastructure components the
+  application engine can compose, (b) which files today are skeleton
+  stubs that must be rewritten vs. enhanced, (c) what the existing
+  CI gate checks. This is a *pre-flight*, not a deliverable.
+- Run the full CI gate (`ruff check`, `ruff format --check`, `mypy`,
+  `pytest -x`) and confirm it is green against `main`. If it is not
+  green, **stop and fix** before starting Prompt 01.
+
+**Out of scope:** Any code changes. This prompt is pure orientation.
+
+---
+
+### Prompt 01 — Candidate application profile schema + data
+
+**Goal:** Add a structured YAML profile covering every form field the
+engine might need, with a Pydantic model and a cached loader.
+
+**Read first:**
+- `pipelines/job_agent/context/candidate_profile.yaml` (for style)
+- `pipelines/job_agent/models/resume_tailoring.py` (for Pydantic model
+  patterns already in use)
+- "Component 1" section of this document (lines ~155-245)
+
+**What to build:**
+1. `pipelines/job_agent/context/candidate_application.yaml` — use the
+   schema in Component 1 of this document verbatim as the starting
+   point. Pre-populate all fields the user's data supports; leave
+   unknowns as empty strings (never `null`), with a `# fill in`
+   comment so a human can finish them. Commit this file; it is
+   personal data and should NOT be gitignored (it is the canonical
+   fixture for CI tests). Offer a sibling `candidate_application.example.yaml`
+   with scrubbed placeholder values.
+2. `pipelines/job_agent/models/application.py`:
+   - `PersonalInfo`, `AddressInfo`, `AuthorizationInfo`,
+     `DemographicInfo`, `EducationInfo`, `ScreeningInfo`,
+     `SourceTracking` as Pydantic v2 `BaseModel` subclasses with full
+     type annotations and `Field(description=...)` on every field.
+   - `CandidateApplicationProfile` composing them with a
+     `schema_version: int = 1`.
+   - `load_application_profile(path: Path) -> CandidateApplicationProfile`
+     using `functools.lru_cache` keyed on the resolved path string.
+     Raise `FileNotFoundError` with a clear message if missing.
+3. Export the public names from `pipelines/job_agent/models/__init__.py`.
+
+**Tests (new file `pipelines/job_agent/tests/test_application_profile.py`):**
+- Load `candidate_application.example.yaml` via `load_application_profile`.
+- Assert every nested section parses.
+- Assert caching: two loads on the same path return the same object
+  (identity check).
+- Assert an invalid YAML (missing `personal.email`) raises
+  `ValidationError`.
+
+**Acceptance:**
+- CI green on the four-check suite.
+- `load_application_profile` is importable from
+  `pipelines.job_agent.models`.
+
+**Out of scope:** field mapping, LLM prompting, any form filling.
+
+---
+
+### Prompt 02 — Deterministic field mapper
+
+**Goal:** Pure-Python, zero-LLM mapping from form field labels to
+profile values, with fuzzy option matching and safe fallbacks.
+
+**Read first:**
+- "Component 2" section of this document (lines ~249-354)
+- The new `pipelines/job_agent/models/application.py` from Prompt 01
+
+**What to build:**
+1. `pipelines/job_agent/application/field_mapper.py`:
+   - `FieldMapping` frozen dataclass: `value: str`, `confidence: float`,
+     `source: str`.
+   - Module-level `_FIELD_PATTERNS: dict[str, Callable[[CandidateApplicationProfile], str]]`
+     populated per Component 2, with entries for every label token
+     listed in the doc.
+   - `_normalize_label(label: str) -> str` — lowercase, strip
+     punctuation, collapse whitespace.
+   - `_fuzzy_match_option(value: str, options: Sequence[str]) -> str | None`
+     using `difflib.SequenceMatcher` with a min ratio of 0.6. If no
+     option clears the threshold, check for decline-style options
+     (`"Decline"`, `"Prefer not"`, `"I don't wish"`) and return one.
+   - `map_field(label, field_type, options, profile) -> FieldMapping`:
+     exact key match → substring match → option fuzzy match → fallback
+     to `FieldMapping(value="", confidence=0.0, source="unmapped")`.
+   - No LLM calls. No network. No async.
+2. Keep the module under 300 lines. If it grows bigger, you're
+   over-engineering — strip speculative features.
+
+**Tests (`pipelines/job_agent/tests/test_application_field_mapper.py`):**
+- Parametrized table of (label, expected profile source) for every
+  deterministic entry in Component 2.
+- Select-field case with exact option list match.
+- Select-field case with fuzzy match (e.g. "Male/Man" → "Male").
+- Select-field case with no good match → returns "Decline to
+  self-identify" when available.
+- Unknown label → `confidence=0.0`.
+- Case insensitivity (`"FIRST NAME *"` → first name).
+
+**Acceptance:**
+- Every field listed in `_FIELD_PATTERNS` has at least one test.
+- `ruff check` passes with zero errors; no `# noqa` added.
+- Coverage for `field_mapper.py` ≥ 95 %.
+
+**Out of scope:** LLM fallback path, API submission, browser interaction.
+
+---
+
+### Prompt 03 — Greenhouse API submitter
+
+**Goal:** Ship the first end-to-end submission strategy, hitting the
+public Greenhouse Job Board API directly (no browser).
+
+**Read first:**
+- "Component 5 — Greenhouse" (lines ~551-617)
+- `core/fetch/http_client.py` for `HttpFetcher` retry/header conventions
+- Current Greenhouse public API docs (via WebFetch; confirm endpoint
+  paths, question-set schema, and multipart field names — the doc
+  snippets are authoritative but version-pinned)
+
+**What to build:**
+1. `pipelines/job_agent/application/models.py` (new) — contains
+   `ApplicationAttempt` per Component 9 of this document. Include
+   `strategy` as a string, `screenshot_path` default `""`, and
+   `fields_filled` / `llm_calls_made` counters.
+2. `pipelines/job_agent/application/submitters/__init__.py`
+3. `pipelines/job_agent/application/submitters/greenhouse_api.py`:
+   - `_parse_greenhouse_url(url: str) -> tuple[str, str]` → `(board_slug, job_id)`.
+     Accept both `boards.greenhouse.io/<slug>/jobs/<id>` and the
+     embedded-iframe form. Raise `ValueError` on non-Greenhouse URLs.
+   - `_fetch_question_set(fetcher, slug, job_id) -> GreenhouseJobSchema`.
+     Parse `questions[]`, `required`, `type`, `label`, `options`.
+   - `submit_greenhouse_application(...)` signature per Component 5:
+     `(listing, profile, resume_path, cover_letter_path, *, llm, run_id)`.
+     Uses `field_mapper.map_field` first; calls the LLM question
+     answerer (from Prompt 07) only for `confidence < 0.8`. In this
+     prompt, stub the LLM path with a `NotImplementedError` so the
+     code path is wired but reserves the interface — Prompt 07 fills
+     it in.
+   - Multipart payload construction, 422 error parsing, 429 backoff
+     respecting `Retry-After`.
+   - **Dry-run mode**: if `dry_run=True`, do not POST — return an
+     `ApplicationAttempt` with `status="awaiting_review"` and a
+     `summary` containing the JSON payload that would have been sent.
+     This is the default for CI and for the first live runs.
+3. Update `pyproject.toml` if you need any extra dependency (you
+   shouldn't; `httpx` and `pydantic` already cover this).
+
+**Tests (`pipelines/job_agent/tests/test_greenhouse_submitter.py`):**
+- `_parse_greenhouse_url` happy path + error path.
+- Question-set parsing from a captured JSON fixture in
+  `pipelines/job_agent/tests/fixtures/greenhouse_job_schema.json`
+  (synthesize a plausible payload covering `short_text`, `long_text`,
+  `multi_select`, `single_select`, and `attachment`).
+- End-to-end dry-run: pass a fake `HttpFetcher` that returns the
+  fixture, assert that every deterministic field maps to the profile
+  value, and that custom questions raise `NotImplementedError` (to be
+  removed in Prompt 07).
+- 422 response translates into `ApplicationAttempt(status="error", ...)`.
+
+**Acceptance:**
+- Zero real network I/O in tests (patch the fetcher).
+- CI gate green.
+- `submit_greenhouse_application` has full type hints including
+  return type.
+
+**Out of scope:** LLM question answering, router, node wiring,
+screenshots.
+
+---
+
+### Prompt 04 — Application router (URL → strategy)
+
+**Goal:** A single function that, given a `JobListing`, decides which
+submitter strategy to use, without opening a browser yet.
+
+**Read first:**
+- "Component 4 — Application router" (lines ~436-547)
+- `pipelines/job_agent/models/__init__.py` for `JobListing`
+
+**What to build:**
+1. `pipelines/job_agent/application/router.py`:
+   - `SubmissionStrategy` (`StrEnum`) and `RouteDecision` (frozen
+     dataclass) per Component 4.
+   - `detect_ats_platform(url: str) -> str | None` covering
+     greenhouse, lever, workday, icims, taleo, ashby, smartrecruiters,
+     bamboohr, linkedin. Handle `http`/`https`, subdomains, trailing
+     slashes, and query strings.
+   - `route_application(listing, *, page=None) -> RouteDecision`:
+     URL-only inference in this prompt. Do not actually navigate the
+     browser; the `page` parameter is accepted but unused. Return
+     `SubmissionStrategy.AGENT_GENERIC` with `requires_browser=True`
+     and `ats_platform="unknown"` for any URL where detection fails.
+     Redirect-chain following is **Prompt 13**.
+2. Update `pipelines/job_agent/application/__init__.py` to export
+   the router publicly.
+
+**Tests (`pipelines/job_agent/tests/test_application_router.py`):**
+- One parametrized case per ATS with at least two URL variants.
+- `route_application` returns the expected strategy for each case.
+- Unknown domain returns `AGENT_GENERIC` with `ats_platform="unknown"`.
+- Garbage URLs (empty string, missing scheme) raise or return
+  `AGENT_GENERIC` — pick one and test it; do not silently return `None`.
+
+**Acceptance:**
+- `detect_ats_platform` has no regex catastrophic-backtracking risks
+  — use `in` checks or anchored patterns.
+- CI gate green.
+
+**Out of scope:** Browser navigation, redirect following, account
+detection.
+
+---
+
+### Prompt 05 — Application node (Greenhouse-only) + graph wiring + config + state
+
+**Goal:** Stand up the LangGraph node that runs the Greenhouse path
+end-to-end, wire it into the graph between `cover_letter_tailoring`
+and `tracking`, and expose new config flags.
+
+**Read first:**
+- "Component 8" and "Component 9" (lines ~1092-1330)
+- `pipelines/job_agent/state.py` — observe the dataclass style
+- `pipelines/job_agent/graph.py` — note the existing `_llm_node_wrapper`
+- `core/config.py` — note `Settings` conventions (`KP_` prefix, `Field`
+  with `description`, validation)
+
+**What to build:**
+1. Extend `pipelines/job_agent/state.py`:
+   - Add `application_results: list[ApplicationAttempt] = field(default_factory=list)`.
+   - Import `ApplicationAttempt` under a `TYPE_CHECKING` guard to
+     avoid circular imports; use `from __future__ import annotations`
+     if not already present.
+2. Extend `core/config.py` with every field in Component 9 (state
+   additions), including `candidate_application_profile_path`,
+   `application_max_per_run`, `application_require_human_review`,
+   `application_linkedin_daily_cap`, `application_min_delay_seconds`.
+   Each must have a `description=` and validated default.
+3. **Rewrite** `pipelines/job_agent/application/node.py`:
+   - Replace the skeleton with the orchestrator per Component 8.
+   - Only the Greenhouse + generic-stuck path is implemented in this
+     prompt. For non-Greenhouse strategies, return
+     `ApplicationAttempt(status="stuck", summary=f"{strategy} not yet implemented")`
+     and do NOT raise. Later prompts fill in each strategy.
+   - Respect `state.dry_run`, `settings.application_max_per_run`,
+     `settings.application_require_human_review`.
+   - Between submissions, `await asyncio.sleep(settings.application_min_delay_seconds)`.
+   - Use structured logging (`structlog`) with `run_id` bound.
+4. Update `pipelines/job_agent/graph.py`:
+   - Register `application` node (wrapped by `_llm_node_wrapper`
+     because the eventual LLM paths need the client).
+   - Replace `graph.add_edge("cover_letter_tailoring", "tracking")`
+     with `cover_letter_tailoring → application → tracking`.
+   - Apply the same change in `build_manual_graph`.
+5. Update `pipelines/job_agent/nodes/tracking.py` to fold
+   `state.application_results` into whatever summary it currently
+   produces.
+
+**Tests:**
+- `pipelines/job_agent/tests/test_application_node.py`:
+  - Dry-run with one Greenhouse listing produces exactly one
+    `awaiting_review` attempt.
+  - `application_max_per_run=1` with two listings processes only the
+    first.
+  - A listing whose status is already `ERRORED` is skipped.
+  - Non-Greenhouse strategy returns `status="stuck"` without raising.
+- Extend `pipelines/job_agent/tests/test_job_analysis.py` (or whichever
+  covers graph wiring) to assert the new edge ordering.
+
+**Acceptance:**
+- `python -m pipelines.job_agent` boots without import errors (test
+  via `python -c "from pipelines.job_agent.graph import build_graph; build_graph()"`).
+- CI gate green.
+- No `# type: ignore` added.
+
+**Out of scope:** LLM answering, templates, browser strategies.
+
+---
+
+### Prompt 06 — Lever API submitter
+
+**Goal:** Second API strategy, same pattern as Greenhouse.
+
+**Read first:**
+- "Component 5 — Lever" (lines ~619-657)
+- `pipelines/job_agent/application/submitters/greenhouse_api.py` from
+  Prompt 03 — match its shape and error-handling style.
+- Current Lever Postings API docs (via WebFetch) to confirm multipart
+  field names and `cards[]` structure.
+
+**What to build:**
+1. `pipelines/job_agent/application/submitters/lever_api.py` mirroring
+   the Greenhouse submitter. Reuse `_build_multipart_headers` or
+   whatever helper you extracted in Prompt 03 — if you didn't extract
+   one, do it now in a `pipelines/job_agent/application/submitters/_common.py`.
+2. `_parse_lever_url(url: str) -> tuple[str, str]` → `(slug, posting_uuid)`.
+3. `submit_lever_application(...)` — same signature as the Greenhouse
+   equivalent, same dry-run contract.
+4. Update the router to dispatch `lever` → `API_LEVER`.
+5. Update `node.py` to call the Lever submitter when
+   `strategy == API_LEVER`.
+
+**Tests:**
+- `pipelines/job_agent/tests/test_lever_submitter.py`:
+  - URL parsing happy path + error path.
+  - Dry-run against a fixture `lever_posting_schema.json`.
+  - Node-level test: listing with Lever URL → dispatched to Lever path.
+
+**Acceptance:**
+- Zero code duplication between the two submitters beyond what is
+  structurally unavoidable. Shared helpers live in `_common.py`.
+- CI gate green.
+
+**Out of scope:** LLM custom-question answers (still stubbed).
+
+---
+
+### Prompt 07 — Enhanced LLM question answerer
+
+**Goal:** Fill the NotImplementedError gap the API submitters left
+for custom questions. Add job context, cover-letter voice matching,
+character-limit awareness, and a run-scoped cache.
+
+**Read first:**
+- "Component 3" (lines ~356-434)
+- Existing `pipelines/job_agent/application/qa_answerer.py`
+- `core/llm/structured.py` for `structured_complete` usage
+- `pipelines/job_agent/application/prompts/qa_system.md`
+
+**What to build:**
+1. **Rewrite** `pipelines/job_agent/application/qa_answerer.py`:
+   - Keep the existing `FormFieldAnswer` pydantic model but add
+     `used_cache: bool = False`.
+   - New function `answer_application_question(...)` per Component 3
+     with `job_context`, `cover_letter_text`, `maxlength`, `options`.
+   - Backwards-compat: keep `answer_form_field` as a thin wrapper that
+     calls the new function with empty job context (so existing
+     imports don't break).
+   - Move the system prompt into
+     `pipelines/job_agent/application/prompts/qa_system.md` — do not
+     hard-code it in Python. The file is read once and cached.
+   - `_QA_CACHE: dict[str, FormFieldAnswer]` keyed on a tuple of
+     `(normalized_label, field_type, maxlength, options_hash)`.
+     Exposed via `clear_qa_cache()` for tests.
+   - `_is_generic_question(label: str) -> bool` per Component 3.
+     Generic questions are always cached; job-specific ones
+     (containing the job title or company) bypass cache.
+2. Update `greenhouse_api.py` and `lever_api.py` to call
+   `answer_application_question` instead of raising. Increment
+   `llm_calls_made` on the `ApplicationAttempt`.
+3. The LLM client uses **Haiku** for this flow, not Sonnet. Pass
+   `model=settings.anthropic_haiku_model` explicitly. Add that
+   setting to `core/config.py` if it does not already exist.
+
+**Tests (`pipelines/job_agent/tests/test_application_qa_answerer.py`):**
+- Use `MockLLMClient` from `core/testing/`.
+- Generic question ("Are you authorized to work?") hits the LLM once,
+  then is served from cache on repeat with `used_cache=True`.
+- Character-limit field appends the `maxlength` constraint to the
+  prompt (assert via captured prompt).
+- Cover-letter tone consistency: feed a known cover letter, assert
+  the system prompt contains its themes.
+- Low-confidence answer (`confidence < 0.5`) is still returned, not
+  raised — the router decides what to do.
+
+**Acceptance:**
+- Greenhouse and Lever submitter tests from Prompts 03 and 06 now
+  succeed with custom questions instead of `NotImplementedError`.
+- CI gate green.
+
+**Out of scope:** Browser/template logic.
+
+---
+
+### Prompt 08 — LinkedIn Easy Apply template
+
+**Goal:** First browser-based submission strategy. Uses the existing
+LinkedIn session, drives the Easy Apply modal wizard, fills each
+step, pauses at submit for human review.
+
+**Read first:**
+- "Component 6 — LinkedIn Easy Apply" (lines ~666-782)
+- `core/browser/session.py` — session reuse
+- `core/browser/human_behavior.py` — `type_with_cadence`, `human_click`,
+  `between_actions_pause`
+- `pipelines/job_agent/discovery/providers/linkedin_provider.py` — how
+  LinkedIn sessions are loaded today (reuse that code)
+- `pipelines/job_agent/application/field_mapper.py` from Prompt 02
+
+**What to build:**
+1. `pipelines/job_agent/application/templates/__init__.py`
+2. `pipelines/job_agent/application/templates/linkedin_easy_apply.py`:
+   - `fill_linkedin_easy_apply(page, listing, profile, resume_path, llm, *, behavior, run_id)`
+     per Component 6.
+   - Use a module-level dict of **primary + fallback selectors** for
+     each canonical element (Easy Apply button, modal, next button,
+     submit, file upload, dismiss). The selector constants have
+     been proven to drift; always try primary then each fallback.
+   - Wizard step handler: enumerate fields, map deterministic ones,
+     call the LLM for the rest, click Next/Review/Submit-ready.
+   - On the submit step, take a full-page screenshot to
+     `data/application_debug/{run_id}/{dedup_key}_linkedin_submit.png`
+     and return `ApplicationAttempt(status="awaiting_review", ...)`.
+     **Never click Submit.**
+   - Daily cap enforcement: read a counter from
+     `data/application_state/linkedin_daily_count.json` (UTC-dated).
+     If the cap is reached, return `status="stuck"` with a
+     diagnostic summary and do not open the modal.
+3. Hook into `node.py` — when `strategy == TEMPLATE_LINKEDIN_EASY_APPLY`,
+   open a `BrowserManager` with the LinkedIn storage state and call
+   the template.
+
+**Tests (`pipelines/job_agent/tests/test_linkedin_easy_apply.py`):**
+- Use Playwright's offline mode pointed at a local fixture HTML page
+  (shipped under `pipelines/job_agent/tests/fixtures/linkedin_easy_apply/`
+  — hand-author a single-step modal clone that is good enough to
+  exercise the field-discovery + next-button path).
+- Daily cap: artificially set the counter to the cap, assert
+  `status="stuck"`.
+- Screenshot path exists after a dry-run submit flow.
+- No real linkedin.com access in tests; `conftest.py` should block
+  the network except for the fixture server.
+
+**Acceptance:**
+- CI gate green.
+- No secrets in repo. Sessions path stays under `data/sessions/`
+  (gitignored).
+
+**Out of scope:** Ashby, Workday, agent filler.
+
+---
+
+### Prompt 09 — Ashby template
+
+**Goal:** Second template filler, much simpler than LinkedIn.
+
+**Read first:**
+- "Component 6 — Ashby template" (lines ~784-793)
+- Prompt 08's implementation for structure reuse
+
+**What to build:**
+1. `pipelines/job_agent/application/templates/ashby.py` — single-page
+   form. Reuse field-enumeration and select-fuzzy-match helpers from
+   the LinkedIn template; if those helpers exist in `linkedin_easy_apply.py`
+   inline, pull them into `pipelines/job_agent/application/templates/_common.py`.
+2. Router updated to dispatch `ashby` → `TEMPLATE_ASHBY`.
+3. Node dispatches `TEMPLATE_ASHBY` to the new filler.
+4. Same human-review invariant: screenshot + pause, never click
+   Submit.
+
+**Tests (`pipelines/job_agent/tests/test_ashby_template.py`):**
+- Fixture HTML at `pipelines/job_agent/tests/fixtures/ashby_form.html`.
+- Assert every standard field gets filled deterministically.
+- Assert a custom question field triggers one LLM call.
+
+**Acceptance:** CI gate green.
+
+**Out of scope:** Workday, agent filler, unknown sites.
+
+---
+
+### Prompt 10 — PageObserver enhancements
+
+**Goal:** Add the observer capabilities the LLM agent filler needs:
+iframe awareness, `data-automation-id`/`data-testid` selectors,
+`maxlength` extraction, and custom-dropdown detection.
+
+**Read first:**
+- "Component 7 — Enhanced PageObserver" (lines ~920-974)
+- `core/browser/observer.py` in full
+- `core/tests/test_browser_stealth.py` for existing observer test patterns
+- `core/browser/AGENTS.md`
+
+**What to build:**
+1. Edit `core/browser/observer.py`:
+   - Extend `_element_to_info` to capture `data-automation-id`,
+     `data-testid`, `data-test`, `maxlength`, `aria-expanded`,
+     `aria-haspopup`. Add these to `ElementInfo` / `PageState`.
+   - Selector-priority logic per Component 7: automation-id → testid
+     → id → name-with-tag → xpath fallback.
+   - Custom dropdown classification: an element with
+     `aria-haspopup="listbox"` or `role="combobox"` that is NOT a
+     `<select>` is classified as `field_kind="custom_select"`.
+   - `_extract_forms` iterates both the main frame and any iframe
+     whose URL matches a known ATS domain list (greenhouse, lever,
+     icims, ashby, smartrecruiters). Skip other frames to avoid
+     noise.
+2. Bump any JSON-schema or snapshot fixtures that test observer
+   output.
+3. Update `core/web_agent/controller.py` downstream consumers that
+   rely on `ElementInfo` fields — mypy will catch anything missing.
+
+**Tests:**
+- Extend existing observer tests with HTML fixtures that exercise
+  each new code path: a field with `data-automation-id`, a field
+  with `maxlength`, a custom dropdown (`<div role="combobox">`),
+  and a form inside an iframe.
+
+**Acceptance:**
+- No regression in existing observer tests.
+- CI gate green.
+- Selector priority is unit-tested and stable.
+
+**Out of scope:** Agent controller action changes — that's Prompt 11.
+
+---
+
+### Prompt 11 — WebAgentController: robust upload + custom dropdown actions
+
+**Goal:** Make the existing agent controller actually reliable on
+ATS forms. Upload now has 4 fallback strategies. Select handles
+both native and custom dropdowns.
+
+**Read first:**
+- "Component 7 — Robust file upload" and "Custom dropdown handling"
+  (lines ~976-1090)
+- `core/web_agent/controller.py` — `_execute_upload`, `_execute_select`
+- `core/web_agent/AGENTS.md`
+
+**What to build:**
+1. Rewrite `_execute_upload` with all four strategies per Component 7.
+   Each strategy logs its attempt at debug level and captures the
+   exception into the `ActionResult.error` string on total failure.
+2. Rewrite `_execute_select` to branch on `tag == "select"` vs. custom.
+   Custom branch: click trigger → `wait_for_selector` on listbox →
+   fuzzy match option text → click. Respect `human_behavior` delays.
+3. Add `_wait_for_listbox(timeout_ms: int = 3000)` helper that returns
+   the found selector so logs show which one matched.
+4. Never swallow exceptions without logging at WARN level. Never
+   bypass `human_behavior` — that's what makes the session look
+   human.
+
+**Tests (`core/tests/test_web_agent_actions.py`):**
+- Mock `Page` / `ElementHandle` with `unittest.mock.AsyncMock`.
+- Upload strategies: strategy 1 success, strategy 1 fail → strategy
+  2 success, all strategies fail → `ActionResult(success=False)`.
+- Select: native select path calls `select_option`; custom path
+  clicks, waits, matches "Male" in a list of options.
+
+**Acceptance:**
+- Existing agent tests stay green.
+- CI gate green.
+- No `broad-except` lint warnings.
+
+**Out of scope:** Agent prompt changes.
+
+---
+
+### Prompt 12 — Agent filler with enhanced system prompt
+
+**Goal:** The fallback path that handles anything the templates
+don't. A single entrypoint the node calls when the router says
+`AGENT_GENERIC` or `AGENT_WORKDAY`.
+
+**Read first:**
+- "Component 7 — Enhanced system prompt" and "ATS-specific hints"
+  (lines ~805-919)
+- Existing `pipelines/job_agent/application/form_workflow.py`
+- `core/web_agent/context.py`
+
+**What to build:**
+1. `pipelines/job_agent/application/agent_filler.py`:
+   - `_build_agent_system_prompt(...)` per Component 7 verbatim.
+     Load the base template from
+     `pipelines/job_agent/application/prompts/form_agent_system.md`
+     and interpolate the structured sections in Python.
+   - `_ats_specific_hints(platform: str) -> list[str]` with Workday,
+     iCIMS, Taleo, (and later) Ashby hint blocks.
+   - `fill_with_agent(page, listing, profile, analysis, *, resume_path, cover_letter_path, llm_client, ats_platform, run_id) -> ApplicationAttempt`:
+     - Build `AgentGoal` with `max_steps=60`, success/failure signals.
+     - Instantiate `WebAgentController` with the new system prompt.
+     - Run the loop. Never pass `require_human_approval_before=["submit"]`
+       — instead, instruct the LLM to report `done` before clicking
+       Submit, and return `awaiting_review` status with a screenshot.
+2. Update `pipelines/job_agent/application/form_workflow.py` to
+   delegate to `fill_with_agent` (keep the old function for a short
+   backwards-compat period; a follow-up prompt removes it).
+3. Node dispatches `AGENT_GENERIC`/`AGENT_WORKDAY` to `fill_with_agent`.
+
+**Tests (`pipelines/job_agent/tests/test_agent_filler.py`):**
+- Use `MockLLMClient` to pre-script a 5-step trajectory: click Apply
+  → fill email → upload resume → fill cover letter → report done.
+- Serve HTML from `pipelines/job_agent/tests/fixtures/agent_generic_form.html`.
+- Assert the final `ApplicationAttempt.status == "awaiting_review"`
+  and `steps_taken == 5`.
+- ATS hint injection: assert a Workday-flagged run includes the
+  "Workday-specific guidance" block in the system prompt.
+
+**Acceptance:**
+- CI gate green.
+- `fill_with_agent` is the only place `WebAgentController` is
+  constructed for application flows.
+
+**Out of scope:** Redirect-chain following, debug capture, retry.
+
+---
+
+### Prompt 13 — Router redirect-chain following
+
+**Goal:** When the listing URL is a LinkedIn/Indeed job board page
+rather than an actual ATS form, follow the "Apply" button to the
+real destination and re-detect the ATS there.
+
+**Read first:**
+- "Component 4 — Redirect chain following" (lines ~524-547)
+- `core/browser/actions.py` for `goto`
+- `pipelines/job_agent/application/router.py` from Prompt 04
+
+**What to build:**
+1. Extend `router.py` with `_follow_apply_link(page) -> str` per
+   Component 4. Handle:
+   - New-tab opens (`context.expect_page()`).
+   - Same-tab redirects.
+   - 3-second wait-for-load-state with a fallback to `networkidle`
+     capped at 8 seconds.
+2. Update `route_application` to accept `page` and call
+   `_follow_apply_link` when the input URL is a LinkedIn job board
+   page (`linkedin.com/jobs/view/...`) or Indeed (`indeed.com/viewjob`).
+   Re-run `detect_ats_platform` on the resulting URL.
+3. Node is updated to open a browser *only* for browser strategies
+   or when the router signals redirect-chain needed. API strategies
+   still skip the browser.
+
+**Tests (`pipelines/job_agent/tests/test_application_router_redirect.py`):**
+- Mock Playwright page: `query_selector` returns a fake apply button,
+  `context.expect_page()` yields a new page whose `url` is a
+  Greenhouse URL. Assert final strategy is `API_GREENHOUSE`.
+- Same case but same-tab: assert strategy resolves from the redirected
+  URL.
+- No apply button found: falls through to `AGENT_GENERIC` without
+  raising.
+
+**Acceptance:**
+- CI gate green.
+- No real linkedin.com / indeed.com access in tests.
+
+**Out of scope:** Account creation handling.
+
+---
+
+### Prompt 14 — Workday specialization
+
+**Goal:** Handle the hardest common ATS. Custom dropdowns, multi-step
+wizard, resume pre-fill verification, account-wall detection.
+
+**Read first:**
+- "Phase 5: Workday specialist" (lines ~1425-1440)
+- `_ats_specific_hints` "workday" block in Component 7 of this doc
+- `pipelines/job_agent/application/agent_filler.py` from Prompt 12
+
+**What to build:**
+1. Extend `_ats_specific_hints` with the comprehensive Workday block
+   if Prompt 12 left it minimal.
+2. `pipelines/job_agent/application/workday_helpers.py`:
+   - `detect_workday_account_wall(page) -> bool` — checks for the
+     sign-in form container (`div[data-automation-id="signInForm"]`
+     or similar). If found, the agent should short-circuit with
+     `stuck`.
+   - `verify_workday_prefill(page, profile) -> list[str]` — after
+     Workday parses the uploaded resume and pre-fills fields, compare
+     `personal.email`, `personal.phone_formatted`, name fields. Return
+     a list of mismatches so the agent can correct them.
+3. Wire these helpers into `fill_with_agent` via a Workday-only
+   pre-pass that runs before the generic observe-act loop.
+
+**Tests (`pipelines/job_agent/tests/test_workday_helpers.py`):**
+- Account wall detection: page with sign-in form → `True`, without
+  → `False`.
+- Pre-fill verification: all-correct → empty list; mismatched phone
+  → list containing "phone".
+- Agent-filler integration test: Workday fixture form → pre-pass
+  runs, generic loop proceeds, `ApplicationAttempt.strategy="agent_workday"`.
+
+**Acceptance:**
+- Account-wall path reports `status="stuck"` with a summary naming
+  the wall, not a generic "something went wrong".
+- CI gate green.
+
+**Out of scope:** Account creation (explicitly forbidden — see "Things
+to not do").
+
+---
+
+### Prompt 15 — Debug capture for every failure path
+
+**Goal:** Every `status="error"` or `status="stuck"` result leaves a
+diagnosable artifact on disk.
+
+**Read first:**
+- `core/browser/debug_capture.py`
+- "Phase 6: Hardening" (lines ~1441-1453)
+
+**What to build:**
+1. Add `_capture_failure_bundle(page, listing, run_id, reason)` helper
+   in `pipelines/job_agent/application/_debug.py`. Produces:
+   - Full-page screenshot
+   - Page HTML (pretty-printed, secrets scrubbed — reuse redaction
+     from `core/web_agent/controller.py`)
+   - JSON metadata: URL, user agent, viewport, cookies-count (never
+     cookie values), timestamp, error summary
+   - All three saved under
+     `data/application_debug/{run_id}/{dedup_key}_{strategy}_{UTC-timestamp}.{png,html,json}`
+2. Every error/stuck return path in `fill_linkedin_easy_apply`,
+   `ashby.py`, `fill_with_agent`, and `node.py`'s exception handler
+   calls `_capture_failure_bundle`. The returned `ApplicationAttempt`
+   gets `screenshot_path` populated.
+3. Error-capture paths must never themselves raise. If the capture
+   fails, log at WARN level and continue.
+
+**Tests (`pipelines/job_agent/tests/test_application_debug_capture.py`):**
+- Fake `Page` + fake filesystem → bundle written with all three
+  artifacts.
+- Capture raising → original error still returned, capture failure
+  logged.
+
+**Acceptance:**
+- CI gate green.
+- Every error path in the application engine produces a bundle OR
+  explains why it did not (e.g., API submitter has no page).
+
+**Out of scope:** Retry logic.
+
+---
+
+### Prompt 16 — Application deduplication + retry
+
+**Goal:** Never re-apply to the same listing. On transient browser
+failures, retry once with a fresh context.
+
+**Read first:**
+- `core/scraper/dedup.py` — model the application dedup on this
+- `pipelines/job_agent/application/node.py` from Prompt 05
+
+**What to build:**
+1. `pipelines/job_agent/application/applied_store.py`:
+   - SQLite-backed store at `data/applied_applications.db`.
+   - Schema: `(dedup_key TEXT PRIMARY KEY, company TEXT, title TEXT,
+     strategy TEXT, submitted_at REAL, status TEXT, artifact_dir TEXT)`.
+   - Functions: `is_already_applied(dedup_key) -> bool`,
+     `record_application(attempt)`, `list_recent(days=30)`.
+   - Do NOT reimplement Bloom filters; the volume is small enough
+     for direct SQLite queries.
+2. Node checks `is_already_applied` before routing. If true, skip
+   with `status="skipped"` and a clear summary.
+3. Wrap the per-listing execution in a retry helper: one retry
+   allowed for any browser strategy that fails with a
+   `PlaywrightTimeoutError` or `ElementHandleError`. API strategies
+   do NOT retry at this layer — the HTTP client already has retries.
+4. The retry uses a **fresh** `BrowserManager` (new context). Never
+   reuse the failed context.
+
+**Tests:**
+- `pipelines/job_agent/tests/test_applied_store.py` — CRUD on a
+  temp DB path.
+- `test_application_node.py` — already-applied listing skipped;
+  transient failure retried once; double failure propagates.
+
+**Acceptance:**
+- CI gate green.
+- `applied_applications.db` path is configurable via `Settings`.
+
+**Out of scope:** Notifications, metrics.
+
+---
+
+### Prompt 17 — Notification integration
+
+**Goal:** The notification node summarizes application outcomes.
+
+**Read first:**
+- `pipelines/job_agent/nodes/notification.py`
+- `core/notifications/` — whatever transport currently exists
+
+**What to build:**
+1. Extend the notification node's render function to group
+   `state.application_results` by `status` and produce a concise
+   summary block. Example:
+
+   ```
+   Applications:
+   - Submitted (API): 3
+   - Awaiting human review (browser): 2
+     * TechCorp — Workday — link to screenshot
+     * DataCo — LinkedIn — link to screenshot
+   - Stuck: 1
+     * Old-Ent — Taleo — account wall detected
+   - Errors: 0
+   ```
+
+2. Include relative paths to the screenshot bundles so a human can
+   click through. Do not attach files; just reference them.
+3. Respect the existing quiet-hours / per-run-throttle logic in the
+   notification node.
+
+**Tests:**
+- `test_notification_application_summary.py` — snapshot test on the
+  rendered summary for each `status` mix.
+
+**Acceptance:** CI gate green.
+
+**Out of scope:** New transports.
+
+---
+
+### Prompt 18 — Per-ATS metrics
+
+**Goal:** Track success rates by ATS so the team knows which
+templates need love.
+
+**Read first:**
+- `core/observability/` — existing metrics scaffolding
+- Prompt 16's `applied_store.py`
+
+**What to build:**
+1. `pipelines/job_agent/application/metrics.py`:
+   - `record_attempt(attempt: ApplicationAttempt)` — writes a row
+     to a time-series table in `applied_applications.db`.
+   - `compute_success_rates(window_days: int = 30) -> dict[str, float]`
+     — per-ATS submission success rate (submitted / total).
+2. CLI reporting subcommand:
+   `python -m pipelines.job_agent.application.metrics report`
+   prints a table of the last-30-day success rates by strategy.
+
+**Tests:**
+- `test_application_metrics.py` — seed some attempts, assert the
+  computed rate, assert the CLI output contains each strategy.
+
+**Acceptance:**
+- CI gate green.
+- No new third-party dependencies.
+
+**Out of scope:** Dashboards, alerting.
+
+---
+
+### Prompt 19 — End-to-end smoke test + CI gate
+
+**Goal:** One test that boots the whole graph against a canned
+listing and asserts the application node produces the expected
+`ApplicationAttempt`. No real network. No real LLM.
+
+**Read first:**
+- `pipelines/job_agent/tests/test_cover_letter_tailoring.py` for the
+  end-to-end style that already exists
+- `core/testing/` for `MockLLMClient`
+
+**What to build:**
+1. `pipelines/job_agent/tests/test_application_e2e.py`:
+   - Seed a `JobAgentState` with one Greenhouse listing and one
+     "unknown" listing.
+   - Use `MockLLMClient` to pre-script all LLM answers.
+   - Patch the HTTP fetcher to return fixture payloads.
+   - Patch `BrowserManager` to return a fake `Page` that serves a
+     fixture HTML form.
+   - Run `graph.ainvoke(state)`.
+   - Assert:
+     - Exactly two entries in `state.application_results`.
+     - The Greenhouse one has `status="awaiting_review"` and
+       `strategy="api_greenhouse"`.
+     - The unknown one has `status="awaiting_review"` and
+       `strategy="agent_generic"`.
+     - The applied store contains both.
+     - The notification summary includes both.
+2. Mark the test with `@pytest.mark.slow` if it runs longer than
+   0.5 s wall-clock; CI already runs slow-marked tests.
+
+**Acceptance:**
+- Running `pytest pipelines/job_agent/tests/test_application_e2e.py -x`
+  passes in under 5 seconds on the CI runner.
+- CI gate green on the full suite.
+
+**Out of scope:** Live network probes. Any real employer URL.
+
+---
+
+### Prompt 20 — Documentation + shipping checklist
+
+**Goal:** Close the loop. Document the feature from a user's
+perspective, verify every invariant, open the PR.
+
+**Read first:**
+- Every file touched since Prompt 01.
+- `README.md`
+- `pipelines/job_agent/README.md`
+
+**What to build:**
+1. Update `pipelines/job_agent/README.md` with a new "Application
+   engine" section explaining: how to set the candidate application
+   profile, how to enable/disable the engine
+   (`KP_APPLICATION_MAX_PER_RUN`, `KP_APPLICATION_REQUIRE_HUMAN_REVIEW`),
+   how dry-run works, where debug bundles land, how to check metrics.
+2. Add a one-page operator runbook at
+   `docs/application_engine_runbook.md` covering: safe first-run
+   procedure, how to inspect a pending-review screenshot, how to
+   actually click Submit after review (the explicit step that is
+   NOT automated), how to recover from a LinkedIn daily-cap trip,
+   how to re-try a stuck listing.
+3. Final pre-PR checklist — tick each off before opening:
+   - [ ] Every new file has a module-level docstring explaining what
+         it is and what it composes.
+   - [ ] No `# type: ignore` added without a one-line comment
+         explaining why.
+   - [ ] No `Any` in public function signatures.
+   - [ ] No hardcoded secrets, cookies, or PII in source control.
+   - [ ] `ruff check` and `ruff format --check` clean.
+   - [ ] `mypy core/ pipelines/ --ignore-missing-imports` clean.
+   - [ ] `pytest --cov=core --cov=pipelines --cov-report=term-missing -x`
+         clean, coverage on `pipelines/job_agent/application/` ≥ 85 %.
+   - [ ] End-to-end smoke test (Prompt 19) passes.
+   - [ ] Manual run: `python -m pipelines.job_agent --dry-run` against
+         a seeded Greenhouse listing produces an `awaiting_review`
+         attempt with a complete payload and zero errors in
+         `state.errors`.
+   - [ ] Graph boot: `python -c "from pipelines.job_agent.graph import
+         build_graph; build_graph()"` exits 0.
+   - [ ] Human-review invariant: grep for `click.*submit` /
+         `submit_application` in new code → every hit is behind a
+         flag or explicit approval path. Zero unconditional Submit
+         clicks.
+   - [ ] LinkedIn daily cap is enforced (test in place).
+   - [ ] Debug capture writes all three artifacts on a forced failure.
+4. Open the PR titled `feat(application): application engine (prompts 01-20)`.
+   Body lists the components, references this architecture doc, and
+   links the Phase 1-6 rollout plan above.
+
+**Acceptance:**
+- CI green on the PR.
+- All checklist boxes ticked in the PR description.
+- The PR diff stays focused on the application engine plus the
+  unavoidable wiring into `state.py`, `graph.py`, `core/config.py`,
+  and `nodes/tracking.py`. Drive-by refactors belong in separate
+  PRs.
+
+**Out of scope:** Shipping auto-submit for any strategy. That is a
+separate decision gated on at least 50 reviewed-and-approved
+applications across each strategy that would become auto-submit.
+
+---
+
+### Audit checklist for anyone reading these prompts later
+
+If you are revisiting this plan and want to confirm it still meets
+the bar ("a flagship coding model can implement the engine from
+scratch with only the repo, internet, and these prompts"), verify:
+
+- [ ] Every prompt names **specific files** it reads and writes.
+- [ ] Every prompt names **tests** with a concrete file path.
+- [ ] Every prompt has an explicit **acceptance** block that names
+      the CI commands.
+- [ ] No prompt assumes state from a conversation that is not in
+      the prompt itself or in a file the prompt reads.
+- [ ] No prompt depends on a later prompt except through the "Out
+      of scope" marker (so a model that stops halfway still ends
+      up with a coherent, green build).
+- [ ] The last prompt closes the loop on docs + CI + PR.
+- [ ] The invariants in "How to use these prompts" are restated or
+      re-linkable without requiring tribal knowledge.
+
+If any of those check boxes fails, rewrite the failing prompt and
+re-run Prompt 00 to re-baseline.
