@@ -89,16 +89,12 @@ async def structured_complete(
         system_parts = []
         if system_prefix:
             system_parts.append(system_prefix)
-        system_parts.append(
-            "Respond with JSON matching this schema:\n" + schema_json
-        )
+        system_parts.append("Respond with JSON matching this schema:\n" + schema_json)
         system_parts.append(_STRUCTURED_SYSTEM_PROMPT)
         system_message = "\n\n".join(system_parts)
         full_prompt = prompt
     else:
-        full_prompt = (
-            f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
-        )
+        full_prompt = f"{prompt}\n\nRespond with JSON matching this schema:\n{schema_json}"
         if system_prefix:
             system_message = f"{system_prefix}\n\n{_STRUCTURED_SYSTEM_PROMPT}"
         else:

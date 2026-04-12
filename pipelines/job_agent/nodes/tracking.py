@@ -155,17 +155,13 @@ async def _upsert_listing(session: AsyncSession, listing: JobListing) -> None:
         listing.id = result.scalar_one_or_none()
 
 
-async def _write_pipeline_run(
-    session: AsyncSession, state: JobAgentState, upserted: int
-) -> None:
+async def _write_pipeline_run(session: AsyncSession, state: JobAgentState, upserted: int) -> None:
     """Record a ``PipelineRun`` row summarising the execution."""
     metadata = {
         "run_id": state.run_id,
         "discovered": len(state.discovered_listings),
         "qualified": len(state.qualified_listings),
-        "tailored": sum(
-            1 for li in state.tailored_listings if li.tailored_resume_path is not None
-        ),
+        "tailored": sum(1 for li in state.tailored_listings if li.tailored_resume_path is not None),
         "upserted_listings": upserted,
         "error_count": len(state.errors),
     }

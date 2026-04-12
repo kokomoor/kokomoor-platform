@@ -392,9 +392,7 @@ def _ensure_evidence_mapping_consistency(plan: CoverLetterPlan) -> None:
     # This eliminates the failure mode where the model populates requirement_evidence
     # correctly but forgets to mirror the same IDs into the flat list.
     all_evidence_ids = {
-        bid
-        for mapping in plan.requirement_evidence
-        for bid in mapping.supporting_bullet_ids
+        bid for mapping in plan.requirement_evidence for bid in mapping.supporting_bullet_ids
     }
     existing = set(plan.selected_bullet_ids)
     merged = list(plan.selected_bullet_ids) + sorted(all_evidence_ids - existing)
@@ -538,9 +536,7 @@ def _ensure_company_in_body(plan: CoverLetterPlan, expected_company: str) -> Non
     """
     body_text = _body_text(plan).lower()
     if expected_company.strip().lower() not in body_text:
-        raise ValueError(
-            f"Letter body does not mention the target company '{expected_company}'."
-        )
+        raise ValueError(f"Letter body does not mention the target company '{expected_company}'.")
 
 
 def _warn_short_letter(plan: CoverLetterPlan, warnings: list[str]) -> None:

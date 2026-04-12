@@ -27,9 +27,7 @@ class TestSalaryFilter:
 
     def test_above_floor(self) -> None:
         assert (
-            _passes_salary_filter(
-                _make_listing(salary_min=200_000), 170_000, allow_unknown=False
-            )
+            _passes_salary_filter(_make_listing(salary_min=200_000), 170_000, allow_unknown=False)
             is True
         )
 
@@ -56,15 +54,11 @@ class TestSalaryFilter:
 
     def test_no_salary_default_passes(self) -> None:
         """Listings without salary info pass through by default."""
-        assert (
-            _passes_salary_filter(_make_listing(), 170_000, allow_unknown=True) is True
-        )
+        assert _passes_salary_filter(_make_listing(), 170_000, allow_unknown=True) is True
 
     def test_no_salary_excluded_when_allow_unknown_false(self) -> None:
         """Listings without salary are dropped when ``allow_unknown=False``."""
-        assert (
-            _passes_salary_filter(_make_listing(), 170_000, allow_unknown=False) is False
-        )
+        assert _passes_salary_filter(_make_listing(), 170_000, allow_unknown=False) is False
 
 
 class TestFilteringNode:
