@@ -15,6 +15,38 @@ from pydantic import Field as PydanticField
 from sqlmodel import Field, SQLModel
 
 from core.models import TimestampMixin
+from pipelines.job_agent.models.application import (
+    AdditionalDegree,
+    AddressInfo,
+    AuthorizationInfo,
+    CandidateApplicationProfile,
+    DemographicInfo,
+    EducationInfo,
+    LanguageProficiency,
+    PersonalInfo,
+    ScreeningInfo,
+    SourceTracking,
+    load_application_profile,
+)
+
+__all__ = [
+    "AdditionalDegree",
+    "AddressInfo",
+    "ApplicationStatus",
+    "AuthorizationInfo",
+    "CandidateApplicationProfile",
+    "DemographicInfo",
+    "EducationInfo",
+    "JobFilter",
+    "JobListing",
+    "JobSource",
+    "LanguageProficiency",
+    "PersonalInfo",
+    "ScreeningInfo",
+    "SearchCriteria",
+    "SourceTracking",
+    "load_application_profile",
+]
 
 # ---------- Enums ----------
 

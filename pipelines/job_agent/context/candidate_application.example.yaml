@@ -1,0 +1,66 @@
+schema_version: 1
+
+# --- Personal information ---
+personal:
+  first_name: Jane
+  last_name: Doe
+  preferred_name: Jane
+  email: jane.doe@example.com
+  phone: "+15555550123"
+  phone_formatted: "(555) 555-0123"
+  linkedin_url: "https://www.linkedin.com/in/jane-doe-example/"
+  github_url: "https://github.com/jane-doe-example"
+  portfolio_url: ""
+  website_url: ""
+
+# --- Address ---
+address:
+  street: "123 Example St"
+  city: Exampletown
+  state: CA
+  zip: "94000"
+  country: United States
+
+# --- Work authorization ---
+authorization:
+  authorized_us: true
+  require_sponsorship: false
+  citizenship: "US Citizen"
+  clearance: ""
+
+# --- Demographics (EEO voluntary) ---
+# These are US federal EEOC categories. All are voluntary.
+demographics:
+  gender: "Decline to self-identify"
+  race_ethnicity: "Decline to self-identify"
+  veteran_status: "I am not a protected veteran"
+  disability_status: "I do not wish to answer"
+
+# --- Education ---
+education:
+  highest_degree: "BS"
+  school: "Example University"
+  graduation_year: "2020"
+  gpa: ""
+  field_of_study: "Computer Science"
+  additional_degrees: []
+
+# --- Common screening answers ---
+screening:
+  years_experience: "5"
+  willing_to_relocate: true
+  desired_salary: "175000"
+  earliest_start_date: ""
+  how_did_you_hear: "Online job search"
+  referral_name: ""
+  languages_spoken:
+    - language: English
+      proficiency: Native
+
+# --- Source tracking ---
+source:
+  default: "Online job search"
+  linkedin: "LinkedIn"
+  greenhouse: "Company website"
+  lever: "Company website"
+  indeed: "Indeed"

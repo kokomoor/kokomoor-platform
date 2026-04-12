@@ -63,4 +63,5 @@ test-results/
 # Tracked exception: candidate_profile.example.yaml (copy to candidate_profile.yaml locally).
 pipelines/job_agent/context/*
 !pipelines/job_agent/context/candidate_profile.example.yaml
+!pipelines/job_agent/context/candidate_application.example.yaml
 !pipelines/job_agent/context/cover_letter_style.md
