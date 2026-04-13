@@ -1,0 +1,12 @@
+{
+  "questions": [
+    {
+      "text": "Why do you want to work at this company?",
+      "required": true
+    },
+    {
+      "text": "Are you authorized to work in the United States?",
+      "required": true
+    }
+  ]
+}

@@ -21,9 +21,9 @@ Manual:  Manual Extraction (URL) → Job Analysis → Tailoring → Cover Letter
 | Tailoring | **Implemented** | Plan pass only (1 LLM call), consumes pre-computed analysis from state. Render → `.docx`. |
 | Cover Letter Tailoring | **Implemented** | 1 structured LLM call per listing. Validated against banned phrases, prose grounding, and evidence mapping. Render → `.docx`. |
 | Human Review | **Planned (M4)** | Email notification, approval gate |
-| Application | **Planned (M4)** | Playwright form-fill |
-| Tracking | **Stub** | Logs only. M2: upsert via `core.database` |
-| Notification | **Stub** | Logs only. M4: email via `core.notifications` |
+| Application | **Implemented** | Multi-strategy orchestrator: API (Greenhouse, Lever), Template (LinkedIn, Ashby), and Agent-based (Workday, Generic) fillers. Supports redirect following, failure capture, deduplication, and metrics. |
+| Tracking | **Implemented** | Simple pass-through logging. Persists successful application attempts to `state.application_results`. |
+| Notification | **Implemented** | Batch summary emails via `core.notifications`. |
 
 ## File map
 

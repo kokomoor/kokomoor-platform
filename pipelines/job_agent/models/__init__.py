@@ -18,6 +18,8 @@ from core.models import TimestampMixin
 from pipelines.job_agent.models.application import (
     AdditionalDegree,
     AddressInfo,
+    ApplicationAttempt,
+    ApplicationStatusLiteral,
     AuthorizationInfo,
     CandidateApplicationProfile,
     DemographicInfo,
@@ -32,7 +34,9 @@ from pipelines.job_agent.models.application import (
 __all__ = [
     "AdditionalDegree",
     "AddressInfo",
+    "ApplicationAttempt",
     "ApplicationStatus",
+    "ApplicationStatusLiteral",
     "AuthorizationInfo",
     "CandidateApplicationProfile",
     "DemographicInfo",

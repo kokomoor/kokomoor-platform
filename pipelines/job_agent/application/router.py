@@ -78,7 +78,66 @@ def detect_ats_platform(url: str) -> str | None:
         return "bamboohr"
     if "linkedin.com" in host and "/jobs/" in path:
         return "linkedin"
+    if "indeed.com" in host and ("/viewjob" in path or "/rc/clk" in path):
+        return "indeed"
     return None
+
+
+async def _follow_apply_link(page: Page) -> str:
+    """Click the Apply button and follow redirects to the actual form."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
+    import structlog
+    logger = structlog.get_logger(__name__)
+
+    # 1. Look for common Apply/Easy Apply buttons
+    # LinkedIn/Indeed specific selectors plus generic fallbacks
+    apply_selectors = [
+        "button.jobs-apply-button",  # LinkedIn
+        "[data-control-name*='apply']",
+        ".jobs-apply-button",
+        "button:has-text('Apply')",
+        "a:has-text('Apply')",
+        "button:has-text('Easy Apply')",
+        "a:has-text('Easy Apply')",
+        "#apply-button",
+        ".apply-button",
+    ]
+
+    apply_btn = None
+    for selector in apply_selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn and await btn.is_visible():
+                apply_btn = btn
+                break
+        except (PlaywrightError, PlaywrightTimeoutError):
+            continue
+
+    if not apply_btn:
+        return page.url
+
+    # 2. Click and handle potential new tab
+    try:
+        async with page.context.expect_page(timeout=5000) as new_page_info:
+            await apply_btn.click()
+        new_page = await new_page_info.value
+        await new_page.wait_for_load_state("domcontentloaded", timeout=5000)
+        return new_page.url
+    except PlaywrightTimeoutError:
+        logger.warning("router.follow_apply_link.new_page_timeout", url=page.url)
+        # Falls through to same-tab navigation or timeout
+        pass
+    except PlaywrightError as e:
+        logger.warning("router.follow_apply_link.error", url=page.url, error=str(e))
+        return page.url
+
+    # 3. Wait for URL change in same tab
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=5000)
+        return page.url
+    except PlaywrightTimeoutError:
+        logger.warning("router.follow_apply_link.same_tab_timeout", url=page.url)
+        return page.url
 
 
 async def route_application(
@@ -86,20 +145,33 @@ async def route_application(
     *,
     page: Page | None = None,
 ) -> RouteDecision:
-    """Determine strategy for a listing using URL-only inference.
+    """Determine the best submission strategy for a listing.
 
-    In this prompt, browser navigation and redirect-chain following are
-    intentionally deferred. The ``page`` parameter is accepted for API
-    compatibility with later prompts but is unused.
+    First checks the listing URL. If that's a job board page (LinkedIn,
+    Indeed) rather than a direct application URL, and a page is provided,
+    navigate and follow the "Apply" link to discover the actual ATS.
     """
-    _ = page
-
-    platform = detect_ats_platform(listing.url)
+    initial_url = listing.url
+    platform = detect_ats_platform(initial_url)
+    
+    # If it's a job board and we have a page, try to follow the apply link
+    final_url = initial_url
+    if platform in {"linkedin", "indeed"} and page:
+        host, path = _parse_host_and_path(initial_url)
+        # Only follow if it looks like a job VIEW page, not the form itself
+        if "linkedin.com" in host and "/jobs/view/" in path:
+            await page.goto(initial_url, wait_until="domcontentloaded")
+            final_url = await _follow_apply_link(page)
+            platform = detect_ats_platform(final_url)
+        elif "indeed.com" in host and "/viewjob" in path:
+            await page.goto(initial_url, wait_until="domcontentloaded")
+            final_url = await _follow_apply_link(page)
+            platform = detect_ats_platform(final_url)
 
     if platform == "greenhouse":
         return RouteDecision(
             strategy=SubmissionStrategy.API_GREENHOUSE,
-            application_url=listing.url,
+            application_url=final_url,
             ats_platform="greenhouse",
             requires_browser=False,
             requires_account=False,
@@ -108,7 +180,7 @@ async def route_application(
     if platform == "lever":
         return RouteDecision(
             strategy=SubmissionStrategy.API_LEVER,
-            application_url=listing.url,
+            application_url=final_url,
             ats_platform="lever",
             requires_browser=False,
             requires_account=False,
@@ -117,7 +189,7 @@ async def route_application(
     if platform == "linkedin":
         return RouteDecision(
             strategy=SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY,
-            application_url=listing.url,
+            application_url=final_url,
             ats_platform="linkedin",
             requires_browser=True,
             requires_account=True,
@@ -126,7 +198,7 @@ async def route_application(
     if platform == "ashby":
         return RouteDecision(
             strategy=SubmissionStrategy.TEMPLATE_ASHBY,
-            application_url=listing.url,
+            application_url=final_url,
             ats_platform="ashby",
             requires_browser=True,
             requires_account=False,
@@ -135,16 +207,16 @@ async def route_application(
     if platform == "workday":
         return RouteDecision(
             strategy=SubmissionStrategy.AGENT_WORKDAY,
-            application_url=listing.url,
+            application_url=final_url,
             ats_platform="workday",
             requires_browser=True,
             requires_account=True,
         )
 
-    if platform in {"icims", "taleo", "smartrecruiters", "bamboohr"}:
+    if platform in {"icims", "taleo", "smartrecruiters", "bamboohr", "indeed"}:
         return RouteDecision(
             strategy=SubmissionStrategy.AGENT_GENERIC,
-            application_url=listing.url,
+            application_url=final_url,
             ats_platform=platform,
             requires_browser=True,
             requires_account=platform in {"icims", "taleo"},
@@ -152,7 +224,7 @@ async def route_application(
 
     return RouteDecision(
         strategy=SubmissionStrategy.AGENT_GENERIC,
-        application_url=listing.url,
+        application_url=final_url,
         ats_platform="unknown",
         requires_browser=True,
         requires_account=False,

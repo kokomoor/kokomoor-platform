@@ -85,10 +85,7 @@ class HumanBehavior:
 
     async def move_mouse_naturally(self, page: Page, target_x: float, target_y: float) -> None:
         """Move mouse along a quadratic Bezier curve with deceleration."""
-        start: dict[str, float] = await page.evaluate(
-            "() => ({ x: window._lastMouseX || 300, y: window._lastMouseY || 400 })"
-        )
-        sx, sy = start["x"], start["y"]
+        sx, sy = self._last_x, self._last_y
 
         mx, my = (sx + target_x) / 2, (sy + target_y) / 2
         cx = mx + random.uniform(-60, 60)
@@ -106,9 +103,7 @@ class HumanBehavior:
             else:
                 await asyncio.sleep(random.uniform(0.006, 0.018))
 
-        await page.evaluate(
-            f"() => {{ window._lastMouseX = {target_x}; window._lastMouseY = {target_y}; }}"
-        )
+        self._last_x, self._last_y = target_x, target_y
 
     async def human_click(self, page: Page, element: Any) -> None:
         """Click an element with natural mouse movement and slight offset."""

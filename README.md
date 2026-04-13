@@ -19,10 +19,10 @@ The pipeline scrapes the full job page (qualifications, requirements, salary, ev
 **Automated discovery flow:**
 
 ```
-Discovery ──► Filtering ──► Bulk Extraction ──► Job Analysis (LLM) ──► Tailoring (LLM) ──► .docx
-Scrape boards  Salary/role   Fetch full page    Themes, keywords,      Plan bullet          Styled
-LinkedIn       filters       content (after     qualifications,        selection,           resume +
-Indeed                       filtering reduces   domain signals         rewrite, order       cover letter
+Discovery ──► Filtering ──► Bulk Extraction ──► Job Analysis (LLM) ──► Ranking ──► Tailoring (LLM) ──► Application ──► Notification
+Scrape boards  Salary/role   Fetch full page    Themes, keywords,      Fit score   Styled resume +    Submit via API  Email/IMAP
+LinkedIn       filters       content (after     qualifications         selection   cover letter       or Browser Agent
+Indeed                       filtering reduces
 Greenhouse                   the set)
 Lever, etc.
 ```
@@ -30,10 +30,10 @@ Lever, etc.
 **Manual single-URL flow:**
 
 ```
-Job URL ──► Extraction ──► Job Analysis (LLM) ──► Tailoring (LLM) ──► .docx
-            Scrape page    Themes, keywords,       Plan bullet          Styled
-            Extract fields qualifications,         selection,           resume
-            Normalize text domain signals          rewrite, order       document
+Job URL ──► Extraction ──► Job Analysis (LLM) ──► Tailoring (LLM) ──► Application ──► Notification
+            Scrape page    Themes, keywords,       Plan bullet          Optional final  Styled
+            Extract fields qualifications,         selection,           submission      resume
+            Normalize text domain signals          rewrite, order       step            document
 ```
 
 **Extraction** fetches the page (HTTP first, Playwright fallback for JS-rendered sites), detects provider/source from the **resolved final URL** after redirects, parses structured metadata (JSON-LD, Open Graph), runs provider-specific selectors (LinkedIn, Greenhouse, Lever, Workday, Amazon, etc.), and falls back to generic content-block scoring. Structured metadata is treated as one candidate, not an automatic winner: visible rich sections (responsibilities/qualifications) can win when higher quality.
@@ -41,6 +41,8 @@ Job URL ──► Extraction ──► Job Analysis (LLM) ──► Tailoring (L
 **Job Analysis** sends the complete description to an LLM (Haiku, configurable) for structured extraction: themes, seniority level, domain tags, ATS keywords, basic/preferred qualifications, and positioning angles.
 
 **Tailoring** takes the analysis + your master profile (a YAML file with every possible resume bullet, tagged by domain) and generates a tailoring plan — which bullets to keep, shorten, or rewrite for this specific role. A deterministic applier assembles the final document, and a code-based renderer produces a formatted `.docx`.
+
+**Application** automates the final submission step using a three-tier strategy: direct API posts (Greenhouse, Lever), specialized templates (LinkedIn Easy Apply, Ashby), or an autonomous LLM-driven browser agent for everything else. It includes automatic failure capture (screenshots/HTML), deduplication, and Workday-specific optimizations.
 
 ### Example use cases
 

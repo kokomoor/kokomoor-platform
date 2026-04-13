@@ -16,6 +16,7 @@ human confirmation before proceeding.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-_SENSITIVE_ACTIONS = {"fill", "type_text", "upload"}
+_SENSITIVE_ACTIONS = {"fill", "type_text", "upload", "press_key"}
 
 
 class WebAgentController:
@@ -59,6 +60,7 @@ class WebAgentController:
         system_prompt: str = "",
         context_provider: Callable[..., Any] | None = None,
         run_id: str = "",
+        frame_interest_patterns: list[str] | None = None,
     ) -> None:
         self._page = page
         self._llm = llm_client
@@ -69,11 +71,14 @@ class WebAgentController:
         self._run_id = run_id or uuid.uuid4().hex[:12]
         self._ctx = AgentContextManager(goal=goal, system_prompt=system_prompt)
         self._history: list[AgentStep] = []
+        self._frame_interest_patterns = frame_interest_patterns
 
     async def run(self) -> AgentResult:
         """Execute the observe-act loop until goal is met or max_steps."""
         for step_num in range(1, self._goal.max_steps + 1):
-            state = await self._observer.get_state(self._page)
+            state = await self._observer.get_state(
+                self._page, interest_patterns=self._frame_interest_patterns
+            )
             prompt = self._ctx.build_prompt(state.to_prompt(), self._history)
 
             try:
@@ -220,8 +225,6 @@ class WebAgentController:
                 if action.value:
                     ok = await self._actions.wait_for(action.value, timeout_ms=5_000)
                     return ActionResult(success=ok, error="" if ok else "Wait timed out")
-                import asyncio
-
                 await asyncio.sleep(2)
                 return ActionResult(success=True)
             if action.action == "press_key":
@@ -269,6 +272,7 @@ class WebAgentController:
             if el is not None:
                 try:
                     await self._actions._behavior.human_click(self._actions.page, el)
+                    await el.evaluate("el => el.value = ''")
                     await self._actions._behavior.type_with_cadence(el, action.value or "")
                     await self._actions._behavior.between_actions_pause()
                     return ActionResult(success=True)
@@ -279,13 +283,61 @@ class WebAgentController:
         return ActionResult(success=False, error="No element_index or value for type_text")
 
     async def _execute_select(self, action: AgentAction) -> ActionResult:
-        if action.element_index is not None:
-            el = await self._observer.get_element_by_index(action.element_index)
-            if el is not None:
-                selector = await el.evaluate("el => el.id ? '#' + el.id : ''")
-                if selector:
-                    return await self._actions.select_option(selector, action.value or "")
-        return ActionResult(success=False, error="Cannot resolve select element")
+        """Handle both native <select> and custom dropdown widgets."""
+        if action.element_index is None:
+            return ActionResult(success=False, error="No element_index for select")
+
+        el = await self._observer.get_element_by_index(action.element_index)
+        if el is None:
+            return ActionResult(success=False, error="Element not found")
+
+        tag = await el.evaluate("el => el.tagName.toLowerCase()")
+
+        # 1. Native <select>: use Playwright's select_option
+        if tag == "select":
+            try:
+                # Try by label first, then value
+                try:
+                    await el.select_option(label=action.value)
+                except Exception:
+                    await el.select_option(value=action.value)
+                await self._actions._behavior.between_actions_pause()
+                return ActionResult(success=True)
+            except Exception as exc:
+                return ActionResult(success=False, error=str(exc)[:300])
+
+        # 2. Custom dropdown: click trigger → wait for listbox → click option
+        try:
+            logger.debug("agent.executing_custom_select", element=action.element_index)
+            await self._actions._behavior.human_click(self._page, el)
+
+            # Combined selector for performance - avoid sequential 2s waits
+            listbox_selector = (
+                "[role='listbox'], [role='option'], .select-menu, "
+                "[data-automation-id*='selectWidget'], .dropdown-menu"
+            )
+
+            try:
+                await self._page.wait_for_selector(listbox_selector, timeout=2500)
+            except Exception:
+                return ActionResult(success=False, error="Dropdown options did not appear")
+
+            # Find and click the matching option
+            options = await self._page.query_selector_all("[role='option'], .option, .dropdown-item")
+            target = (action.value or "").lower()
+            for opt in options:
+                text = (await opt.text_content() or "").strip()
+                if target in text.lower() or text.lower() in target:
+                    await self._actions._behavior.human_click(self._page, opt)
+                    await self._actions._behavior.between_actions_pause()
+                    return ActionResult(success=True)
+
+            return ActionResult(
+                success=False,
+                error=f"Option '{action.value}' not found in dropdown",
+            )
+        except Exception as exc:
+            return ActionResult(success=False, error=str(exc)[:300])
 
     async def _execute_check(self, action: AgentAction) -> ActionResult:
         if action.element_index is not None:
@@ -302,16 +354,68 @@ class WebAgentController:
         return ActionResult(success=False, error="No element_index for check")
 
     async def _execute_upload(self, action: AgentAction) -> ActionResult:
-        if action.element_index is not None and action.value:
+        """Robust file upload with multiple fallback strategies."""
+        file_path = action.value
+        if not file_path:
+            return ActionResult(success=False, error="No file path for upload")
+
+        # Strategy 1: Direct set_input_files on indexed element
+        if action.element_index is not None:
             el = await self._observer.get_element_by_index(action.element_index)
-            if el is not None:
+            if el:
                 try:
-                    await el.set_input_files(action.value)
+                    await el.set_input_files(file_path)
                     await self._actions._behavior.between_actions_pause()
+                    logger.debug("agent.upload_strategy_1_success")
                     return ActionResult(success=True)
                 except Exception as exc:
-                    return ActionResult(success=False, error=str(exc)[:300])
-        return ActionResult(success=False, error="No element_index or file path for upload")
+                    logger.debug("agent.upload_strategy_1_failed", error=str(exc))
+
+        # Strategy 2: Find any file input on the page (even hidden)
+        try:
+            file_input = await self._page.query_selector("input[type='file']")
+            if file_input:
+                await file_input.set_input_files(file_path)
+                await self._actions._behavior.between_actions_pause()
+                logger.debug("agent.upload_strategy_2_success")
+                return ActionResult(success=True)
+        except Exception as exc:
+            logger.debug("agent.upload_strategy_2_failed", error=str(exc))
+
+        # Strategy 3: Find file input in iframes
+        for frame in self._page.frames:
+            if frame == self._page.main_frame:
+                continue
+            try:
+                file_input = await frame.query_selector("input[type='file']")
+                if file_input:
+                    await file_input.set_input_files(file_path)
+                    await self._actions._behavior.between_actions_pause()
+                    logger.debug("agent.upload_strategy_3_success", frame=frame.url)
+                    return ActionResult(success=True)
+            except Exception:
+                continue
+
+        # Strategy 4: Click upload trigger and use file chooser
+        upload_triggers = [
+            "text=Upload", "text=Choose file", "text=Browse",
+            "text=Attach", "[class*='upload']", "[class*='drop']",
+        ]
+        for trigger in upload_triggers:
+            try:
+                el = await self._page.query_selector(trigger)
+                if el and await el.is_visible():
+                    async with self._page.expect_file_chooser(timeout=3000) as fc:
+                        await el.click()
+                    chooser = await fc.value
+                    await chooser.set_files(file_path)
+                    await self._actions._behavior.between_actions_pause()
+                    logger.debug("agent.upload_strategy_4_success", trigger=trigger)
+                    return ActionResult(success=True)
+            except Exception:
+                continue
+
+        return ActionResult(success=False, error="All upload strategies failed")
 
     # ------------------------------------------------------------------
     # Signal detection

@@ -17,9 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pipelines.job_agent.models import JobListing, SearchCriteria
 from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult  # noqa: TC001
-
-if TYPE_CHECKING:
-    from pipelines.job_agent.application.models import ApplicationAttempt
+from pipelines.job_agent.models import ApplicationAttempt
 
 
 class PipelinePhase(StrEnum):

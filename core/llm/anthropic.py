@@ -189,6 +189,12 @@ class AnthropicClient:
         text_blocks = [block.text for block in response.content if block.type == "text"]
         response_text = "\n".join(text_blocks)
 
+        LLM_REQUESTS.labels(model=model, status="success").inc()
+        LLM_LATENCY.labels(model=model).observe(latency_ms / 1000.0)
+        LLM_TOKENS.labels(model=model, direction="input").inc(response.usage.input_tokens)
+        LLM_TOKENS.labels(model=model, direction="output").inc(response.usage.output_tokens)
+        LLM_COST_USD.labels(model=model).inc(cost)
+
         log.info(
             "llm_request_complete",
             input_tokens=response.usage.input_tokens,

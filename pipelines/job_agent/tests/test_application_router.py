@@ -152,7 +152,7 @@ async def test_route_application_unknown_domain_defaults_to_generic() -> None:
     assert decision.requires_browser is True
 
 
-@pytest.mark.parametrize("url", ["", "boards.greenhouse.io/acme/jobs/12345", "not a url"])
+@pytest.mark.parametrize("url", ["", "invalid-domain", "not a url"])
 async def test_route_application_garbage_url_defaults_to_generic(url: str) -> None:
     decision = await route_application(_listing(url))
     assert decision.strategy == SubmissionStrategy.AGENT_GENERIC

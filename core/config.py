@@ -281,6 +281,18 @@ class Settings(BaseSettings):
         ge=10.0,
         description="Minimum seconds between application attempts.",
     )
+    application_debug_capture_enabled: bool = Field(
+        default=True,
+        description="Capture screenshots/HTML/metadata for application failures.",
+    )
+    application_debug_capture_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "application_debug"),
+        description="Directory for application failure-capture artifacts.",
+    )
+    application_debug_capture_html: bool = Field(
+        default=True,
+        description="Include HTML snapshots in application failure captures.",
+    )
 
     # --- Tailoring Cost Control ---
     tailoring_max_listings: int = Field(
@@ -447,6 +459,10 @@ class Settings(BaseSettings):
         default=str(_PROJECT_ROOT / "data" / "scraper_dedup.db"),
         description="SQLite database for scraper deduplication.",
     )
+    application_dedup_db_path: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "application_dedup.db"),
+        description="SQLite database for application deduplication.",
+    )
     scraper_dedup_ttl_days: int = Field(
         default=90, ge=1, description="Days before pruning old dedup keys."
     )
@@ -538,6 +554,17 @@ class Settings(BaseSettings):
         if not p.is_absolute():
             p = _PROJECT_ROOT / p
         return str(p)
+
+    @field_validator(
+        "resume_master_profile_path",
+        "cover_letter_style_guide_path",
+        mode="after",
+    )
+    @classmethod
+    def _ensure_file_exists(cls, v: str) -> str:
+        if not Path(v).is_file():
+            raise ValueError(f"Required configuration file missing: {v}")
+        return v
 
     @property
     def is_dev(self) -> bool:
