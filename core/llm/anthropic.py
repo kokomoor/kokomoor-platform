@@ -18,6 +18,12 @@ from tenacity import (
 from core.config import get_settings
 from core.llm.throttle import get_throttle
 from core.llm.usage import LLMUsage
+from core.observability.metrics import (
+    LLM_COST_USD,
+    LLM_LATENCY,
+    LLM_REQUESTS,
+    LLM_TOKENS,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -160,6 +166,7 @@ class AnthropicClient:
                 )
         except Exception:
             self.usage.errors += 1
+            LLM_REQUESTS.labels(model=model, status="error").inc()
             log.exception("llm_request_failed")
             raise
 

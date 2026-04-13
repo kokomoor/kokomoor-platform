@@ -9,17 +9,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import structlog
 
+from pipelines.job_agent.application._debug import capture_application_failure
 from pipelines.job_agent.application.field_mapper import map_field
-from pipelines.job_agent.application.qa_answerer import answer_application_question, QACache
+from pipelines.job_agent.application.qa_answerer import QACache, answer_application_question
 from pipelines.job_agent.application.registry import register_submitter
 from pipelines.job_agent.application.router import SubmissionStrategy
-from pipelines.job_agent.application.templates._common import get_field_label, select_option_fuzzy
+from pipelines.job_agent.application.templates._common import (
+    get_field_label,
+    select_option_fuzzy,
+)
 from pipelines.job_agent.models import ApplicationAttempt
 
 if TYPE_CHECKING:
@@ -91,31 +96,35 @@ def _check_daily_cap(max_cap: int) -> bool:
 
 
 def _increment_daily_cap() -> None:
-    """Issue 10: Increment the daily application count with atomic-ish write."""
+    """Increment the daily application count via atomic temp-file swap.
+
+    Called from a sync context inside the async submitter — must not
+    invoke ``asyncio.run`` (there is already a running event loop).
+    """
     path = _get_daily_cap_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    
-    # Simple retry loop for near-atomic update without filelock dependency
-    for _ in range(3):
+
+    for attempt in range(3):
         try:
-            data = {"date": today, "count": 1}
+            data: dict[str, object] = {"date": today, "count": 1}
             if path.exists():
                 try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    if data.get("date") == today:
-                        data["count"] = data.get("count", 0) + 1
-                    else:
-                        data = {"date": today, "count": 1}
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(existing, dict) and existing.get("date") == today:
+                        existing["count"] = int(existing.get("count", 0)) + 1
+                        data = existing
                 except (json.JSONDecodeError, OSError):
                     pass
-            
+
             temp_path = path.with_suffix(".tmp")
             temp_path.write_text(json.dumps(data), encoding="utf-8")
             os.replace(temp_path, path)
             return
         except OSError:
-            asyncio.run(asyncio.sleep(0.1))
+            if attempt == 2:
+                raise
+            time.sleep(0.1)
 
 
 # --- Main Flow ---
@@ -129,20 +138,27 @@ async def fill_linkedin_easy_apply(
     client: httpx.AsyncClient | None = None,
     page: Page | None = None,
     llm: LLMClient | None = None,
-    behavior: Optional[HumanBehavior] = None,
+    behavior: HumanBehavior | None = None,
     run_id: str = "",
     dry_run: bool = True,
-    cache: Optional[QACache] = None,
+    cache: QACache | None = None,
     max_daily_cap: int = 25,
 ) -> ApplicationAttempt:
-    """Fill LinkedIn Easy Apply modal wizard."""
+    """Fill the LinkedIn Easy Apply modal wizard up to the submit step.
+
+    Per the application engine architecture, the engine **never** clicks
+    Submit on LinkedIn. When the wizard reaches the submit step the filler
+    captures a screenshot, increments the daily-cap counter, and returns
+    ``awaiting_review``. A human clicks Submit after inspecting the
+    screenshot.
+    """
     if page is None:
         raise ValueError("Page is required for LinkedIn Easy Apply.")
-    
-    # Use a default behavior if not provided
+
     if behavior is None:
-        from core.browser.human_behavior import HumanBehavior
-        behavior = HumanBehavior()
+        from core.browser.human_behavior import HumanBehavior as _HumanBehavior
+
+        behavior = _HumanBehavior()
 
     if _check_daily_cap(max_daily_cap):
         return ApplicationAttempt(
@@ -152,11 +168,9 @@ async def fill_linkedin_easy_apply(
             summary=f"LinkedIn daily application cap ({max_daily_cap}) reached.",
         )
 
-    # Issue 8: Use behavior for navigation to maintain stealth
     await page.goto(listing.url, wait_until="domcontentloaded")
     await behavior.reading_pause(1000)
 
-    # 2. Find and click Easy Apply
     apply_btn = None
     for sel in _EASY_APPLY_BUTTON_SELECTORS:
         apply_btn = await page.query_selector(sel)
@@ -164,7 +178,6 @@ async def fill_linkedin_easy_apply(
             break
 
     if not apply_btn:
-        from pipelines.job_agent.application._debug import capture_application_failure
         screenshot_path = await capture_application_failure(
             page, listing, run_id, "linkedin_template", "Easy Apply button not found"
         )
@@ -264,42 +277,32 @@ async def fill_linkedin_easy_apply(
 
         btn_text = (await next_btn.text_content() or "").strip().lower()
         if "submit" in btn_text:
-            from pipelines.job_agent.application._debug import capture_application_failure
             screenshot_path = await capture_application_failure(
-                page, listing, run_id, "linkedin_template", 
+                page,
+                listing,
+                run_id,
+                "linkedin_template",
                 "LinkedIn Easy Apply ready for review",
-                extra={"dry_run": dry_run}
+                extra={"dry_run": dry_run},
             )
-
-            if dry_run:
-                 _increment_daily_cap()
-                 return ApplicationAttempt(
-                    dedup_key=listing.dedup_key,
-                    status="awaiting_review",
-                    strategy=_STRATEGY.value,
-                    summary="LinkedIn Easy Apply filled (Dry Run).",
-                    screenshot_path=screenshot_path,
-                )
-
-            # In production, we'd click submit here if not dry_run
-            # await behavior.human_click(page, next_btn)
-            # _increment_daily_cap()
-
+            _increment_daily_cap()
             return ApplicationAttempt(
                 dedup_key=listing.dedup_key,
-                status="awaiting_review", # Stay safe, let user click final submit for now
+                status="awaiting_review",
                 strategy=_STRATEGY.value,
-                summary="LinkedIn Easy Apply filled and ready for review.",
+                summary="LinkedIn Easy Apply filled and ready for human review.",
                 screenshot_path=screenshot_path,
             )
 
         await behavior.human_click(page, next_btn)
         await behavior.between_actions_pause()
 
-    from pipelines.job_agent.application._debug import capture_application_failure
     screenshot_path = await capture_application_failure(
-        page, listing, run_id, "linkedin_template", 
-        "LinkedIn Easy Apply wizard failed to reach submit step or disappeared"
+        page,
+        listing,
+        run_id,
+        "linkedin_template",
+        "LinkedIn Easy Apply wizard failed to reach submit step or disappeared",
     )
     return ApplicationAttempt(
         dedup_key=listing.dedup_key,

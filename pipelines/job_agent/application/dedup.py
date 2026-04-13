@@ -1,8 +1,15 @@
 """Application-level deduplication to prevent double-applying.
 
-Uses a custom SQLite store to track which JobListing dedup_keys have
-already been successfully submitted or are currently pending review,
-with rich auditing capabilities.
+Persists every submitted or pending-review application in a SQLite
+store so re-runs of the pipeline don't resubmit the same listing.
+
+The store matches the architecture doc's ``applied_store`` contract:
+``is_already_applied`` / ``filter_unapplied`` / ``mark_applied``, with
+a simple audit schema. Writes are serialised through a ``threading.Lock``
+so concurrent ``asyncio.to_thread`` hops from the same process can't
+collide on the shared connection, and reads go through the same lock
+to avoid observing a partially-written row. WAL journal mode is enabled
+so the SQLite file can tolerate mixed read/write pressure gracefully.
 """
 
 from __future__ import annotations
@@ -25,21 +32,25 @@ class ApplicationDedupStore:
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         settings = get_settings()
-        self._db_path = db_path or settings.application_dedup_db_path
+        self._db_path = str(db_path or settings.application_dedup_db_path)
         self._lock = threading.Lock()
-        
-        # Ensure parent directory exists
+        self._local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
+
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Get a thread-local SQLite connection."""
-        if not hasattr(self, "_local"):
-            self._local = threading.local()
-        if not hasattr(self._local, "conn"):
-            self._local.conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            self._local.conn.row_factory = sqlite3.Row
-        return self._local.conn
+        """Return a thread-local SQLite connection, tracked for close()."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+            self._connections.append(conn)
+        return conn
 
     def _init_db(self) -> None:
         with self._lock:
@@ -60,24 +71,32 @@ class ApplicationDedupStore:
             conn.commit()
 
     async def is_applied(self, listing: JobListing) -> bool:
-        """Check if this listing has already been applied to."""
-        def _check():
-            conn = self._get_conn()
-            cur = conn.execute(
-                "SELECT 1 FROM applied_applications WHERE dedup_key = ?",
-                (listing.dedup_key,)
-            )
-            return cur.fetchone() is not None
-            
-        async with asyncio.Lock(): # Or just rely on thread executor
-            return await asyncio.to_thread(_check)
+        """Check whether this listing has already been recorded."""
 
-    async def mark_applied(self, listing: JobListing, strategy: str = "", status: str = "applied", artifact_dir: str = "") -> None:
-        """Record a successful or pending application."""
-        def _mark():
+        def _check() -> bool:
             with self._lock:
                 conn = self._get_conn()
-                now = time.time()
+                cur = conn.execute(
+                    "SELECT 1 FROM applied_applications WHERE dedup_key = ?",
+                    (listing.dedup_key,),
+                )
+                return cur.fetchone() is not None
+
+        return await asyncio.to_thread(_check)
+
+    async def mark_applied(
+        self,
+        listing: JobListing,
+        *,
+        strategy: str = "",
+        status: str = "applied",
+        artifact_dir: str = "",
+    ) -> None:
+        """Record a successful or pending application idempotently."""
+
+        def _mark() -> None:
+            with self._lock:
+                conn = self._get_conn()
                 conn.execute(
                     """
                     INSERT INTO applied_applications (
@@ -93,10 +112,10 @@ class ApplicationDedupStore:
                         listing.company,
                         listing.title,
                         strategy,
-                        now,
+                        time.time(),
                         status,
                         artifact_dir,
-                    )
+                    ),
                 )
                 conn.commit()
 
@@ -106,51 +125,30 @@ class ApplicationDedupStore:
         """Return only the listings that haven't been applied to yet."""
         if not listings:
             return []
-            
-        def _filter():
-            conn = self._get_conn()
-            keys = [li.dedup_key for li in listings]
-            placeholders = ",".join("?" for _ in keys)
-            cur = conn.execute(
-                f"SELECT dedup_key FROM applied_applications WHERE dedup_key IN ({placeholders})",
-                keys
-            )
-            existing = {row[0] for row in cur.fetchall()}
+
+        def _filter() -> list[JobListing]:
+            with self._lock:
+                conn = self._get_conn()
+                keys = [li.dedup_key for li in listings]
+                placeholders = ",".join("?" for _ in keys)
+                cur = conn.execute(
+                    f"SELECT dedup_key FROM applied_applications "
+                    f"WHERE dedup_key IN ({placeholders})",
+                    keys,
+                )
+                existing = {row[0] for row in cur.fetchall()}
             return [li for li in listings if li.dedup_key not in existing]
 
         return await asyncio.to_thread(_filter)
 
-    async def claim_for_application(self, listing: JobListing) -> bool:
-        """Atomic check-and-set to claim a listing for the current run."""
-        def _claim():
-            with self._lock:
-                conn = self._get_conn()
-                now = time.time()
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO applied_applications (
-                            dedup_key, company, title, strategy, submitted_at, status, artifact_dir
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            listing.dedup_key,
-                            listing.company,
-                            listing.title,
-                            "pending",
-                            now,
-                            "pending",
-                            "",
-                        )
-                    )
-                    conn.commit()
-                    return True
-                except sqlite3.IntegrityError:
-                    return False
-                    
-        return await asyncio.to_thread(_claim)
-
     def close(self) -> None:
-        if hasattr(self, "_local") and hasattr(self._local, "conn"):
-            self._local.conn.close()
-            del self._local.conn
+        """Close every tracked connection, not just the calling thread's."""
+        with self._lock:
+            for conn in self._connections:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+            self._connections.clear()
+            if hasattr(self._local, "conn"):
+                del self._local.conn

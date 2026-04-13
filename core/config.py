@@ -290,8 +290,13 @@ class Settings(BaseSettings):
         description="Directory for application failure-capture artifacts.",
     )
     application_debug_capture_html: bool = Field(
-        default=True,
-        description="Include HTML snapshots in application failure captures.",
+        default=False,
+        description=(
+            "Include HTML snapshots in application failure captures. OFF by "
+            "default: a half-filled application form serialises PII (name, "
+            "email, phone, EEO answers, authorization responses) to disk. "
+            "Opt in explicitly when debugging a specific failure."
+        ),
     )
 
     # --- Tailoring Cost Control ---

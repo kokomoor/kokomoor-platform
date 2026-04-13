@@ -18,6 +18,13 @@ _EXAMPLE_PROFILE = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_resume_artifact() -> Path:
+    path = Path("/tmp/resume.pdf")
+    path.write_bytes(b"%PDF-1.4 stub")
+    return path
+
+
 def _set_application_env(monkeypatch: pytest.MonkeyPatch, *, max_per_run: int = 5) -> None:
     import tempfile
     monkeypatch.setenv("KP_CANDIDATE_APPLICATION_PROFILE_PATH", str(_EXAMPLE_PROFILE))
@@ -29,7 +36,11 @@ def _set_application_env(monkeypatch: pytest.MonkeyPatch, *, max_per_run: int = 
 
 
 def _listing(
-    *, dedup_key: str, url: str, status: ApplicationStatus = ApplicationStatus.DISCOVERED
+    *,
+    dedup_key: str,
+    url: str,
+    status: ApplicationStatus = ApplicationStatus.DISCOVERED,
+    resume_path: Path | str = "/tmp/resume.pdf",
 ) -> JobListing:
     return JobListing(
         title="Software Engineer",
@@ -38,7 +49,7 @@ def _listing(
         url=url,
         dedup_key=dedup_key,
         status=status,
-        tailored_resume_path="/tmp/resume.pdf",
+        tailored_resume_path=str(resume_path),
     )
 
 

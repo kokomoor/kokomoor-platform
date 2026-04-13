@@ -5,14 +5,17 @@ from pipelines.job_agent.state import JobAgentState
 from pipelines.job_agent.models import JobListing, ApplicationAttempt
 
 @pytest.mark.asyncio
-async def test_application_node_smoke():
-    # Setup state with one tailored listing
+async def test_application_node_smoke(tmp_path):
+    resume_path = tmp_path / "resume.pdf"
+    resume_path.write_bytes(b"%PDF-1.4 smoke")
+
     listing = JobListing(
         title="Software Engineer",
         company="TechCorp",
         location="Remote",
         url="https://boards.greenhouse.io/acme/jobs/123",
-        dedup_key="smoke_test_key"
+        dedup_key="smoke_test_key",
+        tailored_resume_path=str(resume_path),
     )
     
     state = JobAgentState(
@@ -43,7 +46,7 @@ async def test_application_node_smoke():
             mock_get_submitter.return_value = mock_submitter
             
             # Mock dedup store to avoid DB issues
-            with patch("pipelines.job_agent.application.dedup.ApplicationDedupStore") as mock_dedup_cls:
+            with patch("pipelines.job_agent.application.node.ApplicationDedupStore") as mock_dedup_cls:
                 mock_dedup = MagicMock()
                 mock_dedup.filter_unapplied = AsyncMock(side_effect=lambda x: x)
                 mock_dedup.mark_applied = AsyncMock()
