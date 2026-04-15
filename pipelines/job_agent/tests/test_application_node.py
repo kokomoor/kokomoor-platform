@@ -8,9 +8,13 @@ from typing import cast
 import pytest
 
 from core.config import get_settings
-from pipelines.job_agent.models import ApplicationAttempt
 from pipelines.job_agent.graph import build_graph, build_manual_graph
-from pipelines.job_agent.models import ApplicationStatus, JobListing, SearchCriteria
+from pipelines.job_agent.models import (
+    ApplicationAttempt,
+    ApplicationStatus,
+    JobListing,
+    SearchCriteria,
+)
 from pipelines.job_agent.state import JobAgentState
 
 _EXAMPLE_PROFILE = (
@@ -186,6 +190,335 @@ async def test_non_greenhouse_returns_stuck_without_raising(
     assert len(out.application_results) == 1
     assert out.application_results[0].status == "awaiting_review"
     assert out.application_results[0].strategy == "api_lever"
+
+
+@pytest.mark.asyncio
+async def test_error_status_is_logged_with_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the 2026-04-14 run produced 3 opaque application errors
+    because the submitter returned status='error' via ApplicationAttempt
+    rather than raising, and the summary string was never logged."""
+    from pipelines.job_agent.application import node as node_module
+    from pipelines.job_agent.application.node import application_node
+
+    _set_application_env(monkeypatch)
+
+    async def _stub_submit(*args: object, **kwargs: object) -> ApplicationAttempt:
+        _ = args
+        listing = cast("JobListing", kwargs.get("listing") or args[0])
+        return ApplicationAttempt(
+            dedup_key=listing.dedup_key,
+            status="error",
+            strategy="api_greenhouse",
+            summary="Easy Apply button not found on page.",
+            screenshot_path="/tmp/snap.png",
+        )
+
+    monkeypatch.setattr(
+        "pipelines.job_agent.application.node.get_submitter",
+        lambda _: _stub_submit,
+    )
+
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def _capture(event: str, **kwargs: object) -> None:
+        captured.append((event, kwargs))
+
+    original_warning = node_module.logger.warning
+    monkeypatch.setattr(
+        node_module.logger,
+        "warning",
+        lambda event, **kwargs: (_capture(event, **kwargs), original_warning(event, **kwargs))[1],
+    )
+
+    state = JobAgentState(
+        search_criteria=SearchCriteria(),
+        run_id="test-app-error-log",
+        tailored_listings=[
+            _listing(dedup_key="gh-err-1", url="https://boards.greenhouse.io/acme/jobs/999"),
+        ],
+    )
+
+    out = await application_node(state)
+
+    assert len(out.application_results) == 1
+    assert out.application_results[0].status == "error"
+
+    error_events = [
+        kwargs for event, kwargs in captured if event == "application.attempt_errored"
+    ]
+    assert error_events, "Expected application.attempt_errored log event"
+    payload = error_events[0]
+    assert payload["dedup_key"] == "gh-err-1"
+    assert payload["run_id"] == "test-app-error-log"
+    assert payload["strategy"] == "api_greenhouse"
+    assert "Easy Apply button not found" in str(payload["summary"])
+
+
+@pytest.mark.asyncio
+async def test_stuck_status_is_logged_at_info_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stuck attempts (external redirects, daily cap, etc.) should log at
+    INFO so operators see them in the normal log stream but they don't
+    trigger the error-count metric."""
+    from pipelines.job_agent.application import node as node_module
+    from pipelines.job_agent.application.node import application_node
+
+    _set_application_env(monkeypatch)
+
+    async def _stub_submit(*args: object, **kwargs: object) -> ApplicationAttempt:
+        _ = args
+        listing = cast("JobListing", kwargs.get("listing") or args[0])
+        return ApplicationAttempt(
+            dedup_key=listing.dedup_key,
+            status="stuck",
+            strategy="template_linkedin_easy_apply",
+            summary=(
+                "LinkedIn listing has an 'Apply' button (external "
+                "redirect), not 'Easy Apply'."
+            ),
+        )
+
+    monkeypatch.setattr(
+        "pipelines.job_agent.application.node.get_submitter",
+        lambda _: _stub_submit,
+    )
+
+    async def _warmup_ok(manager: object, settings: object, log: object) -> bool:
+        return True
+
+    monkeypatch.setattr(node_module, "_ensure_linkedin_authenticated", _warmup_ok)
+
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    original_info = node_module.logger.info
+    monkeypatch.setattr(
+        node_module.logger,
+        "info",
+        lambda event, **kwargs: (captured.append((event, kwargs)), original_info(event, **kwargs))[1],
+    )
+
+    state = JobAgentState(
+        search_criteria=SearchCriteria(),
+        run_id="test-app-stuck-log",
+        tailored_listings=[
+            _listing(
+                dedup_key="li-stuck-1",
+                url="https://www.linkedin.com/jobs/view/12345/",
+            ),
+        ],
+    )
+
+    await application_node(state)
+
+    stuck_events = [
+        kwargs for event, kwargs in captured if event == "application.attempt_stuck"
+    ]
+    assert stuck_events, "Expected application.attempt_stuck log event"
+    payload = stuck_events[0]
+    assert payload["dedup_key"] == "li-stuck-1"
+    assert "external" in str(payload["summary"]).lower()
+
+
+@pytest.mark.asyncio
+async def test_linkedin_auth_warmup_failure_short_circuits_listings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the 2026-04-14 run hit three opaque
+    ``Easy Apply button not found`` errors because discovery had
+    saved a captcha-flagged session, the application engine loaded
+    it, navigated straight to ``/jobs/view/<id>``, and got back the
+    logged-out public render. Now the application node must warm up
+    LinkedIn auth before touching any job URL and, when that warmup
+    fails, mark LinkedIn listings as ``stuck`` and invalidate the
+    poisoned session instead of invoking the submitter."""
+    from pipelines.job_agent.application import node as node_module
+    from pipelines.job_agent.application.node import application_node
+
+    _set_application_env(monkeypatch)
+
+    submitter_called = False
+
+    async def _stub_submit(*args: object, **kwargs: object) -> ApplicationAttempt:
+        nonlocal submitter_called
+        submitter_called = True
+        raise AssertionError(
+            "Submitter must not run when auth warmup fails."
+        )
+
+    monkeypatch.setattr(
+        "pipelines.job_agent.application.node.get_submitter",
+        lambda _: _stub_submit,
+    )
+
+    async def _warmup_fail(
+        manager: object, settings: object, log: object
+    ) -> bool:
+        return False
+
+    monkeypatch.setattr(node_module, "_ensure_linkedin_authenticated", _warmup_fail)
+
+    class _FakeBrowserManager:
+        async def __aenter__(self) -> _FakeBrowserManager:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        async def new_page(self) -> object:
+            raise AssertionError("new_page must not be called when warmup fails")
+
+    monkeypatch.setattr(
+        node_module,
+        "BrowserManager",
+        lambda storage_state=None: _FakeBrowserManager(),
+    )
+
+    invalidated: list[str] = []
+    saved: list[str] = []
+
+    class _FakeSessionStore:
+        def __init__(self, _path: object) -> None:
+            pass
+
+        def load(self, _source: str) -> dict[str, object] | None:
+            return {"cookies": [{"fake": "poisoned"}]}
+
+        def invalidate(self, source: str) -> None:
+            invalidated.append(source)
+
+        async def save(self, source: str, _manager: object) -> bool:
+            saved.append(source)
+            return True
+
+    monkeypatch.setattr(node_module, "SessionStore", _FakeSessionStore)
+
+    state = JobAgentState(
+        search_criteria=SearchCriteria(),
+        run_id="test-linkedin-auth-warmup-fail",
+        tailored_listings=[
+            _listing(
+                dedup_key="li-warmup-1",
+                url="https://www.linkedin.com/jobs/view/4399700465/",
+            ),
+            _listing(
+                dedup_key="li-warmup-2",
+                url="https://www.linkedin.com/jobs/view/4401567323/",
+            ),
+        ],
+    )
+
+    out = await application_node(state)
+
+    assert submitter_called is False
+    assert len(out.application_results) == 2
+    for result in out.application_results:
+        assert result.status == "stuck"
+        assert result.strategy == "template_linkedin_easy_apply"
+        assert "warmup" in result.summary.lower()
+
+    assert invalidated == ["linkedin"], (
+        "Poisoned session must be invalidated when warmup fails."
+    )
+    assert saved == [], "Session must not be saved when warmup fails."
+
+
+@pytest.mark.asyncio
+async def test_linkedin_auth_warmup_success_runs_submitter_and_saves_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive case: when auth warmup returns True, the submitter
+    runs normally and the refreshed session is persisted after the
+    batch so the next run starts from a known-good state."""
+    from pipelines.job_agent.application import node as node_module
+    from pipelines.job_agent.application.node import application_node
+
+    _set_application_env(monkeypatch)
+
+    submit_calls: list[str] = []
+
+    async def _stub_submit(*args: object, **kwargs: object) -> ApplicationAttempt:
+        _ = args
+        listing = cast("JobListing", kwargs.get("listing") or args[0])
+        submit_calls.append(listing.dedup_key)
+        return ApplicationAttempt(
+            dedup_key=listing.dedup_key,
+            status="awaiting_review",
+            strategy="template_linkedin_easy_apply",
+            summary="ready for review",
+        )
+
+    monkeypatch.setattr(
+        "pipelines.job_agent.application.node.get_submitter",
+        lambda _: _stub_submit,
+    )
+
+    async def _warmup_ok(
+        manager: object, settings: object, log: object
+    ) -> bool:
+        return True
+
+    monkeypatch.setattr(node_module, "_ensure_linkedin_authenticated", _warmup_ok)
+
+    class _FakePage:
+        async def close(self) -> None:
+            return None
+
+    class _FakeBrowserManager:
+        async def __aenter__(self) -> _FakeBrowserManager:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        async def new_page(self) -> _FakePage:
+            return _FakePage()
+
+    monkeypatch.setattr(
+        node_module,
+        "BrowserManager",
+        lambda storage_state=None: _FakeBrowserManager(),
+    )
+
+    saved: list[str] = []
+    invalidated: list[str] = []
+
+    class _FakeSessionStore:
+        def __init__(self, _path: object) -> None:
+            pass
+
+        def load(self, _source: str) -> dict[str, object] | None:
+            return {"cookies": []}
+
+        def invalidate(self, source: str) -> None:
+            invalidated.append(source)
+
+        async def save(self, source: str, _manager: object) -> bool:
+            saved.append(source)
+            return True
+
+    monkeypatch.setattr(node_module, "SessionStore", _FakeSessionStore)
+
+    state = JobAgentState(
+        search_criteria=SearchCriteria(),
+        run_id="test-linkedin-auth-warmup-ok",
+        tailored_listings=[
+            _listing(
+                dedup_key="li-warmup-ok-1",
+                url="https://www.linkedin.com/jobs/view/4399700465/",
+            ),
+        ],
+    )
+
+    out = await application_node(state)
+
+    assert submit_calls == ["li-warmup-ok-1"]
+    assert len(out.application_results) == 1
+    assert out.application_results[0].status == "awaiting_review"
+    assert saved == ["linkedin"], "Session must be saved after a successful batch."
+    assert invalidated == []
 
 
 def test_graph_routes_cover_letter_to_application_before_tracking() -> None:

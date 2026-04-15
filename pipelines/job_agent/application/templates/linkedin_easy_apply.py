@@ -42,28 +42,50 @@ logger = structlog.get_logger(__name__)
 _STRATEGY = SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
 
 # --- Selectors ---
+#
+# LinkedIn rewrites its CSS classes frequently but keeps aria-labels stable
+# (accessibility lawsuits keep them honest). All primary selectors target
+# aria-label; class-based selectors are kept only as fallbacks.
+#
+# The Easy Apply button renders as `button[aria-label="Easy Apply to <title>
+# at <company>"]` on the job view page. A plain "Apply" button (external
+# redirect, e.g. Stripe -> Greenhouse) has aria-label starting with "Apply"
+# but without "Easy". We detect both and distinguish them in code.
 
 _EASY_APPLY_BUTTON_SELECTORS = (
-    "button.jobs-apply-button",
-    "[data-control-name*='inapply']",
+    "button[aria-label^='Easy Apply']",
+    ".jobs-apply-button",
     ".jobs-s-apply button",
 )
 
+# Catches the non-Easy-Apply case (external redirect). The starts-with anchor
+# keeps us from matching unrelated controls like "Apply filters" or "Apply
+# location". This is a secondary probe — only used when Easy Apply selectors
+# return nothing.
+_APPLY_BUTTON_SELECTORS = (
+    "button[aria-label^='Apply to']",
+    "button[aria-label^='Apply on']",
+    "button[aria-label='Apply']",
+)
+
 _MODAL_SELECTORS = (
+    "div[role='dialog'][aria-labelledby*='easy-apply']",
+    "div[role='dialog']",
     ".jobs-easy-apply-modal",
-    "div[data-test-modal-id='easy-apply-modal']",
     ".artdeco-modal",
 )
 
 _NEXT_BUTTON_SELECTORS = (
     "button[aria-label='Continue to next step']",
     "button[aria-label='Review your application']",
-    "button.artdeco-button--primary",
+    "footer button.artdeco-button--primary",
+    ".artdeco-button--primary:not([aria-label*='Submit']):not([aria-label*='Dismiss'])",
 )
 
 _SUBMIT_BUTTON_SELECTORS = (
     "button[aria-label='Submit application']",
-    "footer button.artdeco-button--primary",
+    "button[aria-label^='Submit']",
+    "footer button[aria-label*='Submit']",
 )
 
 _FIELD_SELECTORS = (
@@ -71,6 +93,22 @@ _FIELD_SELECTORS = (
     "select",
     "textarea",
     "fieldset",
+)
+
+# Selectors for the "Sign in to see who you know at <company>" overlay
+# that LinkedIn injects on job pages even for authenticated users. It
+# sits on top of the Apply button and makes it invisible to query_selector.
+# The modal uses LinkedIn's artdeco-modal component; the dismiss button
+# consistently carries aria-label="Dismiss" or the class
+# artdeco-modal__dismiss. Checked against three observed occurrences.
+_BLOCKER_MODAL_SELECTORS = (
+    ".artdeco-modal",
+    "div[role='dialog']",
+)
+_BLOCKER_MODAL_DISMISS_SELECTORS = (
+    "button[aria-label='Dismiss']",
+    "button.artdeco-modal__dismiss",
+    "[data-test-modal-close-btn]",
 )
 
 
@@ -127,6 +165,80 @@ def _increment_daily_cap() -> None:
             time.sleep(0.1)
 
 
+# --- Apply button locator ---
+
+
+async def _locate_apply_button(page: Page) -> tuple[object | None, bool]:
+    """Find the job's apply control and classify it.
+
+    Returns:
+        (element, is_easy_apply). ``element`` is ``None`` when neither an
+        Easy Apply nor a plain Apply button can be found. ``is_easy_apply``
+        distinguishes the LinkedIn modal flow from external ATS redirects
+        when an element is found.
+    """
+    for sel in _EASY_APPLY_BUTTON_SELECTORS:
+        btn = await page.query_selector(sel)
+        if btn is None:
+            continue
+        if not await btn.is_visible():
+            continue
+        aria_label = (await btn.get_attribute("aria-label") or "").lower()
+        text = (await btn.text_content() or "").strip().lower()
+        # For class-based fallbacks the aria-label may not contain "easy",
+        # so fall back to visible text when the attribute is inconclusive.
+        if "easy apply" in aria_label or "easy apply" in text:
+            return btn, True
+        # Class-based fallback matched something that isn't labelled Easy
+        # Apply; treat it as a plain Apply button and fall through to the
+        # external-redirect path rather than blindly clicking.
+        if "apply" in aria_label or "apply" in text:
+            return btn, False
+
+    for sel in _APPLY_BUTTON_SELECTORS:
+        btn = await page.query_selector(sel)
+        if btn is None:
+            continue
+        if not await btn.is_visible():
+            continue
+        return btn, False
+
+    return None, False
+
+
+# --- Blocker modal dismissal ---
+
+
+async def _dismiss_blocker_modals(page: Page, behavior: HumanBehavior) -> bool:
+    """Dismiss any overlay modal that appeared after navigation.
+
+    LinkedIn's "Sign in to see who you already know at <company>" modal
+    fires on job pages even for authenticated users and sits in front of
+    the Apply button. It is NOT the Easy Apply wizard — it's a social-graph
+    upsell. We detect it by checking for an open artdeco/dialog modal that
+    carries a dismiss control, then click the X before any apply-button
+    query runs.
+
+    Returns True if a modal was found and dismissed.
+    """
+    for modal_sel in _BLOCKER_MODAL_SELECTORS:
+        modal = await page.query_selector(modal_sel)
+        if modal is None or not await modal.is_visible():
+            continue
+        for dismiss_sel in _BLOCKER_MODAL_DISMISS_SELECTORS:
+            btn = await modal.query_selector(dismiss_sel)
+            if btn is not None and await btn.is_visible():
+                logger.info(
+                    "linkedin.blocker_modal_dismissed",
+                    modal_selector=modal_sel,
+                    dismiss_selector=dismiss_sel,
+                )
+                await behavior.human_click(page, btn)
+                await asyncio.sleep(0.8)
+                return True
+    return False
+
+
 # --- Main Flow ---
 
 async def fill_linkedin_easy_apply(
@@ -171,11 +283,13 @@ async def fill_linkedin_easy_apply(
     await page.goto(listing.url, wait_until="domcontentloaded")
     await behavior.reading_pause(1000)
 
-    apply_btn = None
-    for sel in _EASY_APPLY_BUTTON_SELECTORS:
-        apply_btn = await page.query_selector(sel)
-        if apply_btn:
-            break
+    # Dismiss the "Sign in to see who you know at <company>" overlay that
+    # LinkedIn injects even for authenticated users on some job pages. It
+    # sits on top of the Apply button and will cause _locate_apply_button
+    # to find nothing. Dismissal is a no-op if no such modal is present.
+    await _dismiss_blocker_modals(page, behavior)
+
+    apply_btn, is_easy_apply = await _locate_apply_button(page)
 
     if not apply_btn:
         screenshot_path = await capture_application_failure(
@@ -189,13 +303,16 @@ async def fill_linkedin_easy_apply(
             screenshot_path=screenshot_path,
         )
 
-    btn_text = (await apply_btn.text_content() or "").strip().lower()
-    if "easy apply" not in btn_text and "apply" in btn_text:
+    if not is_easy_apply:
+        # External redirect — the listing uses the employer's own ATS
+        # (Stripe -> Greenhouse, Datadog -> Lever, etc). The Easy Apply
+        # template cannot drive that flow; the agent_generic fallback
+        # should pick it up on the next run once routing is upgraded.
         return ApplicationAttempt(
             dedup_key=listing.dedup_key,
             status="stuck",
             strategy=_STRATEGY.value,
-            summary="Button is 'Apply', not 'Easy Apply'. External redirect not handled here.",
+            summary="LinkedIn listing has an 'Apply' button (external redirect), not 'Easy Apply'.",
         )
 
     await behavior.human_click(page, apply_btn)
@@ -266,17 +383,15 @@ async def fill_linkedin_easy_apply(
                     await field.evaluate("el => el.value = ''")
                     await behavior.type_with_cadence(field, qa_result.answer)
 
-        next_btn = None
-        for sel in _NEXT_BUTTON_SELECTORS:
-            next_btn = await modal.query_selector(sel)
-            if next_btn:
+        # Reached the final step? Capture and stop — we never click Submit.
+        submit_btn = None
+        for sel in _SUBMIT_BUTTON_SELECTORS:
+            submit_btn = await modal.query_selector(sel)
+            if submit_btn and await submit_btn.is_visible():
                 break
+            submit_btn = None
 
-        if not next_btn:
-            break
-
-        btn_text = (await next_btn.text_content() or "").strip().lower()
-        if "submit" in btn_text:
+        if submit_btn:
             screenshot_path = await capture_application_failure(
                 page,
                 listing,
@@ -293,6 +408,16 @@ async def fill_linkedin_easy_apply(
                 summary="LinkedIn Easy Apply filled and ready for human review.",
                 screenshot_path=screenshot_path,
             )
+
+        next_btn = None
+        for sel in _NEXT_BUTTON_SELECTORS:
+            next_btn = await modal.query_selector(sel)
+            if next_btn and await next_btn.is_visible():
+                break
+            next_btn = None
+
+        if not next_btn:
+            break
 
         await behavior.human_click(page, next_btn)
         await behavior.between_actions_pause()

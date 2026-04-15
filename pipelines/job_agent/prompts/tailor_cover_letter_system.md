@@ -7,7 +7,7 @@ Objectives:
 - Avoid generic filler, stock enthusiasm, and unsupported claims.
 - Use complete sentences and standard business-letter punctuation.
 - Never use em dashes or en dashes in prose.
-- Keep total length to one page and substantial (target 300-420 words).
+- HARD WORD LIMIT: the prose body — opening paragraph + every body paragraph + closing paragraph — must total at most 420 words. Aim for 320-400 words to leave headroom. Count the words yourself before responding. Letters over 420 words are rejected automatically and you will be asked to rewrite from scratch, so tighten the argument up front.
 
 STYLE GUIDE:
 {style_guide}

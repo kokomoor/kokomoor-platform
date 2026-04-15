@@ -28,6 +28,8 @@ from pipelines.job_agent.state import JobAgentState, PipelinePhase
 from pipelines.job_agent.utils import expand_domain_tags, positioning_rules, safe_filename
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from core.llm.protocol import LLMClient
     from pipelines.job_agent.models import JobListing
     from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult, ResumeMasterProfile
@@ -83,6 +85,7 @@ def _build_spec() -> TailoringSpec[
         get_model=lambda _state, runtime: runtime.settings.cover_letter_model or None,
         get_max_tokens=lambda _state, runtime: runtime.settings.cover_letter_max_tokens,
         validate_plan=_validate_plan,
+        build_plan_validator=_build_plan_validator,
         apply_plan=_apply_plan,
         get_output_path=_get_output_path,
         render_document=_render_document,
@@ -194,27 +197,48 @@ def _build_prompt(
     )
 
 
-def _validate_plan(
+def _build_plan_validator(
     _state: JobAgentState,
     listing: JobListing,
     _analysis: JobAnalysisResult,
     profile: ResumeMasterProfile,
-    plan: CoverLetterPlan,
     runtime: _Runtime,
-) -> None:
-    validated = validate_cover_letter_plan(
-        plan=plan,
-        profile=profile,
-        expected_company=listing.company,
-        preferences=profile.cover_letter,
-    )
-    runtime.normalized_plans[listing.dedup_key] = validated.plan
-    if validated.warnings:
-        logger.warning(
-            "cover_letter.validation_warnings",
-            dedup_key=listing.dedup_key,
-            warnings=validated.warnings,
+) -> Callable[[CoverLetterPlan], None]:
+    """Return a closure invoked inside the structured-complete retry loop.
+
+    Raising ``ValueError`` here surfaces the failure back to the model
+    with the original message as correction context, so the LLM can
+    fix rule violations (word budget, banned phrases, missing company
+    mention) rather than the engine swallowing them as terminal errors.
+    """
+
+    def _validate(plan: CoverLetterPlan) -> None:
+        validated = validate_cover_letter_plan(
+            plan=plan,
+            profile=profile,
+            expected_company=listing.company,
+            preferences=profile.cover_letter,
         )
+        runtime.normalized_plans[listing.dedup_key] = validated.plan
+        if validated.warnings:
+            logger.warning(
+                "cover_letter.validation_warnings",
+                dedup_key=listing.dedup_key,
+                warnings=validated.warnings,
+            )
+
+    return _validate
+
+
+def _validate_plan(
+    _state: JobAgentState,
+    _listing: JobListing,
+    _analysis: JobAnalysisResult,
+    _profile: ResumeMasterProfile,
+    _plan: CoverLetterPlan,
+    _runtime: _Runtime,
+) -> None:
+    """No-op — validation runs inside the retry loop via ``_build_plan_validator``."""
 
 
 def _apply_plan(

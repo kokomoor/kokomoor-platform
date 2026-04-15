@@ -1,0 +1,11 @@
+{
+  "run_id": "manual-run",
+  "source": "a2d858571e98ef0e7039c464b2185f69",
+  "stage": "linkedin_template",
+  "reason": "Easy Apply button not found",
+  "error": "",
+  "captured_at_utc": "2026-04-15T20:56:43.620984+00:00",
+  "extra": {},
+  "page_url": "https://www.linkedin.com/jobs/view/4400124291/",
+  "page_title": "OneStream Software hiring OneStream Demo Engineer in United States | LinkedIn"
+}

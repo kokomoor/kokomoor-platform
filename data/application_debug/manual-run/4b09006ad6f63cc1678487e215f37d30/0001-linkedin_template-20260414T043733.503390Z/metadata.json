@@ -1,0 +1,11 @@
+{
+  "run_id": "manual-run",
+  "source": "4b09006ad6f63cc1678487e215f37d30",
+  "stage": "linkedin_template",
+  "reason": "Easy Apply button not found",
+  "error": "",
+  "captured_at_utc": "2026-04-14T04:37:33.503615+00:00",
+  "extra": {},
+  "page_url": "https://www.linkedin.com/jobs/view/4400048194/",
+  "page_title": "Data Analytics Engineering Manager | Jobs via Dice | LinkedIn"
+}

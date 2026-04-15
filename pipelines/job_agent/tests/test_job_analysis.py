@@ -207,3 +207,42 @@ class TestJobAnalysisNode:
         await job_analysis_node(state, llm_client=mock_client)
 
         assert mock_client.calls[0][1]["model"] == "claude-haiku-4-5-20251001"
+
+
+class TestAnalysisSystemPromptCacheability:
+    """Regression guard for prompt-cache cost savings.
+
+    The Anthropic prefix cache requires a minimum prefix size per model.
+    Empirically verified against the live Haiku 4.5 API on 2026-04-14:
+    the actual threshold is ~4,096 tokens (not the 2,048 listed in the
+    public docs, which track an older Haiku version). Prompts below
+    ~4,096 tokens produce ``cache_hit: null`` with zero creation and
+    zero read — silently no-op caching.
+
+    The production run of 2026-04-14 produced ``cache_hit: null`` across
+    all 28 Haiku calls at ~2,449 combined tokens. Fix: expand the system
+    prompt so the combined system + schema is comfortably above 4,096
+    tokens with headroom for minor wording edits.
+    """
+
+    def test_analysis_system_exceeds_haiku_cache_minimum(self) -> None:
+        from pipelines.job_agent.models.resume_tailoring import JobAnalysisResult
+        from pipelines.job_agent.nodes.job_analysis import _ANALYSIS_SYSTEM
+
+        schema_chars = len(
+            json.dumps(JobAnalysisResult.model_json_schema(), indent=2)
+        )
+        combined_chars = len(_ANALYSIS_SYSTEM) + schema_chars + 200  # boilerplate headroom
+        # English prose tokenises at roughly 3.7 chars/token on Claude's
+        # tokenizer. Use the conservative 4 chars/token for the floor
+        # estimate and demand a comfortable buffer above the empirically
+        # observed Haiku 4.5 threshold (~4,096 tokens).
+        approx_tokens = combined_chars // 4
+        assert approx_tokens >= 4200, (
+            f"Combined system prompt + schema is ~{approx_tokens} tokens, "
+            "below the Haiku 4.5 prefix cache minimum (~4,096 tokens, "
+            "empirically verified). Expand _ANALYSIS_SYSTEM with additional "
+            "stable, useful content so prompt caching engages and cuts "
+            "per-call cost. The 2026-04-14 production run burned ~$0.19 on "
+            "uncached prefill that would have been near-zero with caching."
+        )

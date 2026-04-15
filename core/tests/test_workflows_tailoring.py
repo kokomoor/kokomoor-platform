@@ -155,3 +155,61 @@ async def test_apply_render_and_prompt_delegation(tmp_path: Path) -> None:
 
 def _render(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_plan_validator_triggers_retry(tmp_path: Path) -> None:
+    """A ValueError from build_plan_validator must retry the LLM call."""
+    engine: TailoringEngine[TailorState, str, str, list[str], DummyPlan, str, Runtime] = (
+        TailoringEngine()
+    )
+    state = TailorState(items=["a"], contexts={"a": "ctx-a"})
+
+    def _reject_short(_s, _i, _c, _inv, _runtime):
+        def _check(plan: DummyPlan) -> None:
+            if len(plan.plan) < 5:
+                raise ValueError(f"plan too short ({len(plan.plan)} chars); need ≥ 5")
+
+        return _check
+
+    spec = _spec(tmp_path)
+    spec = TailoringSpec(**{**spec.__dict__, "build_plan_validator": _reject_short})
+
+    client = MockLLMClient(
+        responses=[
+            '{"plan":"ok"}',  # too short — should retry
+            '{"plan":"ok-longer"}',  # passes
+        ]
+    )
+
+    await engine.run(state, llm_client=client, spec=spec)
+
+    assert "a" in state.outputs
+    assert state.applied == [("a", "ok-longer")]
+    assert not any("plan too short" in err for err in state.errors)
+    assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_plan_validator_exhausts_retries_and_logs(tmp_path: Path) -> None:
+    """When the validator never accepts a response, the item fails with the real error."""
+    engine: TailoringEngine[TailorState, str, str, list[str], DummyPlan, str, Runtime] = (
+        TailoringEngine()
+    )
+    state = TailorState(items=["a"], contexts={"a": "ctx-a"})
+
+    def _always_reject(_s, _i, _c, _inv, _runtime):
+        def _check(_plan: DummyPlan) -> None:
+            raise ValueError("never good enough")
+
+        return _check
+
+    spec = _spec(tmp_path)
+    spec = TailoringSpec(**{**spec.__dict__, "build_plan_validator": _always_reject})
+
+    client = MockLLMClient(responses=['{"plan":"x"}'] * 3)
+
+    await engine.run(state, llm_client=client, spec=spec)
+
+    assert "a" not in state.outputs
+    assert any("never good enough" in err for err in state.errors)

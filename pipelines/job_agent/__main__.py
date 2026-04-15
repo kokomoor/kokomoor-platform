@@ -49,7 +49,12 @@ async def main() -> None:
             "SpaceX",
             "Apple",
         ],
-        target_roles=["TPM", "Senior Engineer", "Engineering Manager", "Technical Product Manager"],
+        target_roles=[
+            "Technical Program Manager",
+            "Technical Product Manager",
+            "Senior Engineer",
+            "Engineering Manager",
+        ],
         salary_floor=170_000,
         sources=[JobSource.WELLFOUND, JobSource.BUILTIN, JobSource.LINKEDIN],
     )

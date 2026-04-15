@@ -57,6 +57,20 @@ class TailoringSpec(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Document
     # Optional cacheable system prefix. Must return the SAME bytes on
     # every call within a run so the Anthropic prefix cache hits.
     build_cached_system: Callable[[StateT, RuntimeT], str | None] | None = None
+    # Optional per-item semantic validator factory. When provided, the
+    # engine closes over the item context and hands the returned
+    # ``(plan) -> None`` callable to ``structured_complete`` so
+    # domain-rule violations (word budgets, banned phrases, cross-field
+    # consistency) are fed back to the LLM and retried rather than
+    # swallowed as terminal errors. Must not perform I/O — it runs
+    # inside the retry loop and may be called multiple times per item.
+    build_plan_validator: (
+        Callable[
+            [StateT, ItemT, ContextT, InventoryT, RuntimeT],
+            Callable[[PlanT], None],
+        ]
+        | None
+    ) = None
     # Upper bound on concurrent in-flight LLM requests. 1 = sequential.
     concurrency: int = 1
 
@@ -102,6 +116,11 @@ class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Docume
                     prompt = spec.build_prompt(
                         state, item, context, inventory, inventory_view, runtime
                     )
+                    plan_validator = None
+                    if spec.build_plan_validator is not None:
+                        plan_validator = spec.build_plan_validator(
+                            state, item, context, inventory, runtime
+                        )
                     plan = await structured_complete(
                         llm_client,
                         prompt,
@@ -111,6 +130,7 @@ class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Docume
                         run_id=spec.get_run_id(state),
                         system_prefix=cached_system,
                         cache_system=cached_system is not None,
+                        validator=plan_validator,
                     )
                     spec.validate_plan(state, item, context, inventory, plan, runtime)
                     document = spec.apply_plan(state, item, context, inventory, plan, runtime)
@@ -118,6 +138,13 @@ class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Docume
                     spec.render_document(state, item, document, output_path, runtime)
                     spec.on_item_success(state, item, plan, document, output_path, runtime)
                 except Exception as exc:
+                    logger.warning(
+                        "tailoring.item_failed",
+                        workflow=spec.name,
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:500],
+                        exc_info=True,
+                    )
                     spec.on_item_error(state, item, exc, runtime)
 
         items = spec.get_items(state)

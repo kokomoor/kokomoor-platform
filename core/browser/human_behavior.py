@@ -49,6 +49,14 @@ def _adjacent_key(char: str) -> str:
 class HumanBehavior:
     """Simulate realistic human browser interactions."""
 
+    def __init__(self) -> None:
+        # Seed the cursor position to a natural starting point near the
+        # top-left of a typical viewport. move_mouse_naturally reads
+        # _last_x/_last_y before writing them; without this initialiser
+        # the first call raises AttributeError.
+        self._last_x: float = random.uniform(200, 400)
+        self._last_y: float = random.uniform(150, 300)
+
     async def reading_pause(self, content_length_chars: int) -> None:
         """Pause proportionally to content length, simulating reading."""
         words = content_length_chars / 5

@@ -119,29 +119,90 @@ async def application_node(
     # 2. Browser Submissions — single BrowserManager lifecycle for the batch
     if browser_listings:
         session_store = SessionStore(Path("data/sessions"))
+        has_linkedin = any(
+            strategy == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
+            for _, strategy in browser_listings
+        )
         async with BrowserManager(storage_state=session_store.load("linkedin")) as manager:
-            for index, (listing, strategy) in enumerate(browser_listings):
-                page = await manager.new_page()
-                try:
-                    attempt = await _apply_with_retry(
-                        listing=listing,
-                        strategy=strategy,
-                        profile=profile,
-                        client=None,
-                        page=page,
-                        llm_client=llm_client,
-                        settings=settings,
-                        run_id=state.run_id,
-                        dry_run=state.dry_run,
-                        cache=cache,
+            # Warm up the session before touching any job URLs. The
+            # 2026-04-14 run loaded a freshly-saved discovery session,
+            # navigated straight to `/jobs/view/<id>`, and hit a
+            # logged-out render (gray "Me" silhouette, no Easy Apply
+            # modal wiring). Discovery had saved the session while
+            # captcha challenges were active, which leaves the cookies
+            # in a "flagged" state — valid enough for LinkedIn to serve
+            # the search results, stale enough to degrade into the
+            # public job-view when opened in a fresh context. Re-auth
+            # here shifts that failure from three opaque
+            # button-not-found errors into a single clean retry.
+            linkedin_auth_ok = False
+            if has_linkedin:
+                linkedin_auth_ok = await _ensure_linkedin_authenticated(
+                    manager, settings, log
+                )
+                if not linkedin_auth_ok:
+                    log.warning(
+                        "application.linkedin_auth_warmup_failed",
+                        listings=sum(
+                            1
+                            for _, s in browser_listings
+                            if s == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
+                        ),
                     )
-                finally:
-                    await page.close()
+
+            for index, (listing, strategy) in enumerate(browser_listings):
+                if (
+                    strategy == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
+                    and not linkedin_auth_ok
+                ):
+                    attempt = ApplicationAttempt(
+                        dedup_key=listing.dedup_key,
+                        status="stuck",
+                        strategy=strategy.value,
+                        summary=(
+                            "LinkedIn authentication warmup failed; skipping "
+                            "Easy Apply to avoid cascading bot detection. "
+                            "Resolve the login (solve captcha in headed mode "
+                            "or refresh credentials) and retry."
+                        ),
+                    )
+                else:
+                    page = await manager.new_page()
+                    try:
+                        attempt = await _apply_with_retry(
+                            listing=listing,
+                            strategy=strategy,
+                            profile=profile,
+                            client=None,
+                            page=page,
+                            llm_client=llm_client,
+                            settings=settings,
+                            run_id=state.run_id,
+                            dry_run=state.dry_run,
+                            cache=cache,
+                        )
+                    finally:
+                        await page.close()
 
                 attempts.append(attempt)
                 attempt_pairs.append((listing, attempt))
                 await _handle_attempt_outcome(state, listing, attempt, dedup_store)
                 await _jittered_delay(index, len(browser_listings), state.dry_run, settings)
+
+            # Persist the authenticated state so the next run inherits
+            # a clean session. If warmup failed, invalidate instead so
+            # we don't re-poison the next run.
+            if has_linkedin:
+                if linkedin_auth_ok:
+                    try:
+                        await session_store.save("linkedin", manager)
+                    except Exception:
+                        log.warning(
+                            "application.session_save_failed",
+                            exc_info=True,
+                        )
+                else:
+                    session_store.invalidate("linkedin")
 
     dedup_store.close()
 
@@ -157,6 +218,74 @@ async def application_node(
         errors=sum(1 for a in attempts if a.status == "error"),
     )
     return state
+
+
+async def _ensure_linkedin_authenticated(
+    manager: BrowserManager,
+    settings: Settings,
+    log: Any,
+) -> bool:
+    """Verify the browser context can render LinkedIn in a logged-in state.
+
+    Warms up the context against ``www.linkedin.com``, checks
+    ``LinkedInProvider.is_authenticated`` (positive DOM + URL signals),
+    and falls back to the full login flow when the cookies loaded from
+    the session file don't resolve into an authenticated view. Reuses
+    the same provider the discovery phase uses so we get free coverage
+    of every auth mode (welcome-back card, password-only, full login).
+
+    A return value of ``False`` is authoritative: the caller should
+    short-circuit every LinkedIn listing in the batch and avoid
+    re-saving the poisoned context back to disk.
+    """
+    from pipelines.job_agent.discovery.providers.linkedin import LinkedInProvider
+
+    email = settings.linkedin_email.strip()
+    password = settings.linkedin_password.get_secret_value()
+    if not email or not password:
+        log.warning("application.linkedin_credentials_missing")
+        return False
+
+    provider = LinkedInProvider()
+    behavior = HumanBehavior()
+    page = await manager.new_page()
+    try:
+        try:
+            await page.goto(
+                f"https://{provider.base_domain()}",
+                wait_until="domcontentloaded",
+                timeout=20_000,
+            )
+        except Exception:
+            log.warning("application.linkedin_warmup_nav_failed", exc_info=True)
+            return False
+
+        await behavior.reading_pause(800)
+
+        if await provider.is_authenticated(page):
+            log.info("application.linkedin_session_valid")
+            return True
+
+        log.info("application.linkedin_session_stale_reauthenticating")
+        try:
+            success = await provider.authenticate(
+                page,
+                email=email,
+                password=password,
+                behavior=behavior,
+            )
+        except Exception:
+            log.exception("application.linkedin_reauth_crashed")
+            return False
+
+        if success and await provider.is_authenticated(page):
+            log.info("application.linkedin_reauth_success")
+            return True
+
+        log.warning("application.linkedin_reauth_failed")
+        return False
+    finally:
+        await page.close()
 
 
 async def _jittered_delay(index: int, total: int, dry_run: bool, settings: Settings) -> None:
@@ -241,6 +370,32 @@ async def _handle_attempt_outcome(
     _apply_status_transition(state, listing, attempt)
 
     platform = _platform_from_strategy(attempt.strategy)
+
+    # Surface failure reasons in the pipeline log. Without this, a submitter
+    # that returns ``status="error"`` via ApplicationAttempt (rather than
+    # raising) leaves only a `failure_capture.saved` breadcrumb — the summary
+    # text sits unused inside state.errors until end-of-run aggregation. The
+    # 2026-04-14 run produced three of these opaque failures before we
+    # realised the Easy Apply selectors had gone stale.
+    if attempt.status == "error":
+        logger.warning(
+            "application.attempt_errored",
+            dedup_key=listing.dedup_key,
+            run_id=state.run_id,
+            strategy=attempt.strategy,
+            platform=platform,
+            summary=attempt.summary[:300],
+            screenshot_path=attempt.screenshot_path or None,
+        )
+    elif attempt.status == "stuck":
+        logger.info(
+            "application.attempt_stuck",
+            dedup_key=listing.dedup_key,
+            run_id=state.run_id,
+            strategy=attempt.strategy,
+            platform=platform,
+            summary=attempt.summary[:300],
+        )
 
     APPLICATION_ATTEMPTS.labels(
         platform=platform,

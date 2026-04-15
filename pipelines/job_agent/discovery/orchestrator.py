@@ -264,8 +264,11 @@ class DiscoveryOrchestrator:
                 storage_state=storage_state,
             )
 
-            # Retry policy: if auth failed and we had a session, invalidate
-            # and retry with a fresh browser context.
+            # Retry policy: if auth failed and we had a session, retry
+            # with a fresh browser context. The failed attempt already
+            # invalidated the on-disk session via the finally block in
+            # ``_attempt_browser_provider``, so no second invalidate
+            # call is needed here.
             auth_failed = any(
                 err.startswith("auth_failed") or err.startswith("auth_missing")
                 for err in result.errors
@@ -275,7 +278,6 @@ class DiscoveryOrchestrator:
                     "orchestrator.auth_retry_with_fresh_session",
                     source=source.value,
                 )
-                session_store.invalidate(source)
                 result = await DiscoveryOrchestrator._attempt_browser_provider(
                     provider=provider,
                     criteria=criteria,
@@ -299,7 +301,16 @@ class DiscoveryOrchestrator:
         capture: FailureCapture,
         storage_state: dict[str, object] | None,
     ) -> ProviderResult:
-        """Single attempt to run a browser provider."""
+        """Single attempt to run a browser provider.
+
+        Session save policy: we only persist the browser's storage_state
+        when authentication succeeded (or wasn't required). Saving a
+        session mid-auth-failure captures cookies from a half-completed
+        login flow — LinkedIn interstitials, CAPTCHA challenges, expired
+        CSRF tokens — which poisons the next run.  The 2026-04-14 run
+        hit this: run 2 failed auth, saved the bad session, run 3 loaded
+        it and also failed auth (because the session was corrupted).
+        """
         source = provider.source
         behavior = HumanBehavior()
         rate_limiter = DomainRateLimiter(source)
@@ -311,6 +322,7 @@ class DiscoveryOrchestrator:
                 refs: list[ListingRef] = []
                 errors: list[str] = []
                 saved = False
+                auth_ok = False  # Flip to True only after a successful auth
 
                 try:
                     if provider.requires_auth():
@@ -394,11 +406,20 @@ class DiscoveryOrchestrator:
                                     pages_scraped=0,
                                     session_saved=False,
                                 )
+                            auth_ok = True
                         else:
                             logger.info(
                                 "orchestrator.already_authenticated",
                                 source=source.value,
                             )
+                            auth_ok = True
+                    else:
+                        # Providers that don't require auth (unused today
+                        # for browser providers but kept for future
+                        # public-site scrapers) skip the whole auth block;
+                        # their session, such as it exists, is always
+                        # worth persisting.
+                        auth_ok = True
 
                     refs = await provider.run_search(
                         page,
@@ -423,7 +444,19 @@ class DiscoveryOrchestrator:
                         *([f"capture:{artifacts[0]}"] if artifacts else []),
                     ]
                 finally:
-                    saved = await session_store.save(source, browser)
+                    if auth_ok:
+                        saved = await session_store.save(source, browser)
+                    else:
+                        # Ensure any previously-loaded poisoned session is
+                        # removed so the next run starts clean. This is the
+                        # belt-and-braces counterpart to the retry policy
+                        # in _run_browser_provider, which handles the
+                        # same-run retry case.
+                        session_store.invalidate(source)
+                        logger.info(
+                            "orchestrator.session_skipped_save_auth_failed",
+                            source=source.value,
+                        )
 
                 return ProviderResult(
                     source=source,

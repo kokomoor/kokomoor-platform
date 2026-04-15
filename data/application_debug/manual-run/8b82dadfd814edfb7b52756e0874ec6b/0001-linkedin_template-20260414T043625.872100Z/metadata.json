@@ -1,0 +1,11 @@
+{
+  "run_id": "manual-run",
+  "source": "8b82dadfd814edfb7b52756e0874ec6b",
+  "stage": "linkedin_template",
+  "reason": "Easy Apply button not found",
+  "error": "",
+  "captured_at_utc": "2026-04-14T04:36:25.872286+00:00",
+  "extra": {},
+  "page_url": "https://www.linkedin.com/jobs/view/4401567323/",
+  "page_title": "Engineering Manager, Compliance Data and Evidence Engine | Stripe | LinkedIn"
+}

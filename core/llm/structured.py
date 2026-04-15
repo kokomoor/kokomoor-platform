@@ -21,6 +21,8 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from core.llm.protocol import LLMClient
 
 logger = structlog.get_logger(__name__)
@@ -45,12 +47,13 @@ async def structured_complete(
     run_id: str = "",
     system_prefix: str | None = None,
     cache_system: bool = False,
+    validator: Callable[[T], None] | None = None,
 ) -> T:
     """Request a structured response from Claude and validate it.
 
     Appends the Pydantic model's JSON schema to the prompt so Claude
-    knows the expected shape.  Retries on parse/validation failure with
-    an error-correction prompt.
+    knows the expected shape.  Retries on parse/validation/semantic
+    failure with an error-correction prompt.
 
     Args:
         client: The LLM client instance.
@@ -68,6 +71,14 @@ async def structured_complete(
             cacheable prefix via ``cache_control={"type":"ephemeral"}``.
             Only meaningful when ``system_prefix`` is large enough to
             exceed the per-model cache minimum (~1024 tokens).
+        validator: Optional semantic validator invoked after Pydantic
+            validation succeeds. When it raises ``ValueError`` (or any
+            exception), the retry loop feeds the error message back to
+            the model as correction context, identical to the path used
+            for JSON/Pydantic errors. Use this for domain rules that
+            cannot be expressed in the schema (word budgets, banned
+            phrases, cross-field consistency). The validator may mutate
+            ``result`` for normalization but must not perform I/O.
 
     Returns:
         A validated instance of ``response_model``.
@@ -129,6 +140,8 @@ async def structured_complete(
         try:
             data = json.loads(cleaned)
             result = response_model.model_validate(data)
+            if validator is not None:
+                validator(result)
             logger.info(
                 "structured_output_success",
                 model_type=response_model.__name__,
@@ -139,6 +152,17 @@ async def structured_complete(
             last_error = str(exc)
             logger.warning(
                 "structured_output_retry",
+                model_type=response_model.__name__,
+                attempt=attempt + 1,
+                error=last_error[:200],
+            )
+        except ValueError as exc:
+            # Raised by the semantic ``validator``. Treat it like a
+            # Pydantic ValidationError: feed the message back to the
+            # model so it can fix the specific rule it violated.
+            last_error = str(exc)
+            logger.warning(
+                "structured_output_semantic_retry",
                 model_type=response_model.__name__,
                 attempt=attempt + 1,
                 error=last_error[:200],
