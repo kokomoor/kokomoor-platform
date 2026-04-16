@@ -23,6 +23,7 @@ from pipelines.job_agent.cover_letter.prompting import (
 from pipelines.job_agent.cover_letter.renderer import render_cover_letter_docx
 from pipelines.job_agent.cover_letter.validation import validate_cover_letter_plan
 from pipelines.job_agent.models import ApplicationStatus
+from pipelines.job_agent.resume.age_up import age_up_profile
 from pipelines.job_agent.resume.profile import load_master_profile
 from pipelines.job_agent.state import JobAgentState, PipelinePhase
 from pipelines.job_agent.utils import expand_domain_tags, positioning_rules, safe_filename
@@ -36,6 +37,15 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+_AGE_UP_COVER_LETTER_ADDENDUM = """
+## Seniority Framing (Active)
+Present the candidate as a mid-to-senior professional throughout:
+- Electric Boat / General Dynamics: four years of progressive engineering experience (2019-2023), Engineer I to Engineer II. Do not reference any period as an internship or frame any contribution as early-career.
+- Write the opening and body assuming the reader expects a senior candidate with substantial engineering and leadership experience. Avoid language that signals student status, early career, or seeking a first real role.
+- The engineering track record (Lincoln Lab, Electric Boat, Gauntlet-42) and founder credentials define the letter's authority. The MBA reinforces analytical depth but does not lead. Do not open with the MBA.
+- Tone and framing: peer-to-peer. The candidate is evaluating the opportunity as much as the company is evaluating the candidate.
+"""
 
 _ENGINE: TailoringEngine[
     JobAgentState,
@@ -94,6 +104,8 @@ def _build_spec() -> TailoringSpec[
         on_complete=_on_complete,
         build_cached_system=lambda _state, runtime: runtime.cached_system,
         concurrency=get_settings().llm_max_concurrency,
+        max_retries=4,
+        fallback_without_validator=True,
     )
 
 
@@ -124,6 +136,8 @@ def _prepare_runtime(state: JobAgentState) -> _Runtime:
         system_template=system_template, style_guide=style_guide
     )
     profile = load_master_profile(Path(settings.resume_master_profile_path))
+    if state.age_up:
+        profile = age_up_profile(profile)
     return _Runtime(
         settings=settings,
         output_dir=output_dir,
@@ -179,14 +193,14 @@ def _build_inventory_view(
 
 
 def _build_prompt(
-    _state: JobAgentState,
+    state: JobAgentState,
     listing: JobListing,
     analysis: JobAnalysisResult,
     _profile: ResumeMasterProfile,
     inventory_view: str,
     runtime: _Runtime,
 ) -> str:
-    return build_cover_letter_prompt(
+    prompt = build_cover_letter_prompt(
         template=runtime.prompt_template,
         job_title=listing.title,
         company=listing.company,
@@ -195,6 +209,9 @@ def _build_prompt(
         inventory_view=inventory_view,
         positioning_rules=positioning_rules(analysis.domain_tags),
     )
+    if state.age_up:
+        prompt += _AGE_UP_COVER_LETTER_ADDENDUM
+    return prompt
 
 
 def _build_plan_validator(

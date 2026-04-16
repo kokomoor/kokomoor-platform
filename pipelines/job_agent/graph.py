@@ -187,6 +187,62 @@ def build_graph(
     return graph.compile()
 
 
+def build_manual_tailor_graph(
+    *,
+    llm_client: LLMClient | None = None,
+) -> CompiledStateGraph[JobAgentState, None, JobAgentState, JobAgentState]:
+    """Truncated graph for direct URL tailoring: resume + cover letter, no application.
+
+    Flow:
+        START -> manual_extraction -> job_analysis -> tailoring
+              -> cover_letter_tailoring -> notification -> END
+    """
+    graph: StateGraph[JobAgentState, None, JobAgentState, JobAgentState] = StateGraph(
+        JobAgentState,
+    )
+
+    graph.add_node("manual_extraction", manual_extraction_node)
+    graph.add_node(
+        "job_analysis",
+        cast(Any, _llm_node_wrapper(job_analysis_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "tailoring",
+        cast(Any, _llm_node_wrapper(tailoring_node, llm_client=llm_client)),  # noqa: TC006
+    )
+    graph.add_node(
+        "cover_letter_tailoring",
+        cast(
+            "Any",
+            _llm_node_wrapper(cover_letter_tailoring_node, llm_client=llm_client),
+        ),
+    )
+    graph.add_node("notification", notification_node)
+
+    graph.set_entry_point("manual_extraction")
+    graph.add_conditional_edges(
+        "manual_extraction",
+        _should_continue_after_manual_extraction,
+        {
+            "job_analysis": "job_analysis",
+            "notification": "notification",
+        },
+    )
+    graph.add_conditional_edges(
+        "job_analysis",
+        _should_continue_after_job_analysis,
+        {
+            "ranking": "tailoring",
+            "notification": "notification",
+        },
+    )
+    graph.add_edge("tailoring", "cover_letter_tailoring")
+    graph.add_edge("cover_letter_tailoring", "notification")
+    graph.add_edge("notification", END)
+
+    return graph.compile()
+
+
 def build_manual_graph(
     *,
     llm_client: LLMClient | None = None,

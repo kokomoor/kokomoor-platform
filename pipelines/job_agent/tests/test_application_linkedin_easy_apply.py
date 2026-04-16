@@ -127,6 +127,65 @@ class TestLocateApplyButton:
         assert element is plain
         assert is_easy_apply is False
 
+    @pytest.mark.asyncio
+    async def test_anchor_easy_apply_is_found(self) -> None:
+        """LinkedIn may render Easy Apply as an <a> tag. The new
+        a[aria-label^='Easy Apply'] selector must catch it."""
+        anchor = _make_button(
+            aria_label="Easy Apply to Staff Engineer at Anthropic",
+            text="Easy Apply",
+        )
+        page = _make_page_with_selectors({
+            "button[aria-label^='Easy Apply']": None,  # button variant absent
+            "a[aria-label^='Easy Apply']": anchor,
+        })
+
+        element, is_easy_apply = await _locate_apply_button(page)
+
+        assert element is anchor
+        assert is_easy_apply is True
+
+    @pytest.mark.asyncio
+    async def test_anchor_external_apply_is_found(self) -> None:
+        """LinkedIn external 'Apply' rendered as <a> (external link arrow).
+        Regression: the OpenLoop listing (5a36c4f1) returned 'Easy Apply button
+        not found' because all button-based selectors missed the <a> element."""
+        anchor = _make_button(
+            aria_label="Apply to Senior Software Engineer at OpenLoop on company website",
+            text="Apply",
+        )
+        page = _make_page_with_selectors({
+            "button[aria-label^='Easy Apply']": None,
+            "a[aria-label^='Easy Apply']": None,
+            ".jobs-apply-button": None,
+            "button[aria-label^='Apply to']": None,
+            "a[aria-label^='Apply to']": anchor,
+        })
+
+        element, is_easy_apply = await _locate_apply_button(page)
+
+        assert element is anchor
+        assert is_easy_apply is False
+
+    @pytest.mark.asyncio
+    async def test_broad_fallback_finds_apply_anchor(self) -> None:
+        """When all named selectors miss, the broad candidate scan must find a
+        visible anchor with aria-label 'apply to ...' and classify it False."""
+        anchor = _make_button(
+            aria_label="Apply to SWE at Obscure Co on company website",
+            text="Apply",
+        )
+        # _make_page_with_selectors only stubs query_selector; we need
+        # query_selector_all for the broad fallback. Build a custom page mock.
+        page = MagicMock()
+        page.query_selector = AsyncMock(return_value=None)  # all named selectors miss
+        page.query_selector_all = AsyncMock(return_value=[anchor])
+
+        element, is_easy_apply = await _locate_apply_button(page)
+
+        assert element is anchor
+        assert is_easy_apply is False
+
 
 class TestDismissBlockerModals:
     """Regression guard for the 2026-04-15 'Sign in to see who you know'
@@ -207,8 +266,19 @@ class TestSelectorsShape:
         assert "Easy Apply" in _EASY_APPLY_BUTTON_SELECTORS[0]
 
     def test_apply_selectors_are_anchored(self) -> None:
-        """`^=` prevents matching 'Apply filters' and other false positives."""
+        """`^=` prevents matching 'Apply filters' and other false positives.
+
+        aria-label-based selectors must be exact or starts-with anchored.
+        Class/attribute-based fallbacks (no aria-label) are also allowed as
+        long as they're narrowly scoped (e.g. a.jobs-apply-button).
+        """
         for sel in _APPLY_BUTTON_SELECTORS:
-            assert "aria-label" in sel
-            # Must either be exact match or starts-with anchor
-            assert "='Apply'" in sel or "^='Apply" in sel
+            if "aria-label" in sel:
+                # aria-label selectors must be anchored
+                assert "='Apply'" in sel or "^='Apply" in sel
+            else:
+                # Non-aria-label selectors must be narrowly scoped
+                # (class or attribute-based, not bare element selectors)
+                assert "." in sel or "[" in sel, (
+                    f"Non-aria-label selector must be class/attr-scoped: {sel!r}"
+                )

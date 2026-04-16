@@ -4,7 +4,7 @@
   "stage": "auth_failed",
   "reason": "provider_authenticate_returned_false",
   "error": "",
-  "captured_at_utc": "2026-04-15T21:35:48.885856+00:00",
+  "captured_at_utc": "2026-04-16T04:35:09.426746+00:00",
   "extra": {},
   "page_url": "https://www.linkedin.com/login?fromSignIn=true&trk=guest_homepage-basic_nav-header-signin",
   "page_title": "LinkedIn Login, Sign in | LinkedIn"

@@ -286,6 +286,18 @@ async def _authenticate_linkedin(
     the same provider used by DiscoveryOrchestrator — so all auth modes
     (welcome-back card, password-only, full login) are covered without
     duplicating logic.
+
+    After provider.authenticate() returns True, this function verifies
+    that the LinkedIn session token (li_at) is actually present in the
+    browser context. LinkedIn's SPA router can navigate to /feed/ based
+    on cached client-side state without the server issuing li_at, causing
+    is_authenticated to return a false positive. Without li_at, subsequent
+    job-view pages show the unauthenticated "Sign in to see who you know"
+    modal instead of the Easy Apply button.
+
+    If li_at is missing, we force a full server-side login by navigating
+    directly to /login — which triggers a real HTTP redirect to /feed/
+    only when the server validates credentials, guaranteeing li_at is set.
     """
     from pipelines.job_agent.discovery.providers.linkedin import LinkedInProvider
 
@@ -320,11 +332,59 @@ async def _authenticate_linkedin(
             password=password,
             behavior=behavior,
         )
-        if success:
-            log.info("application.linkedin_auth_ok")
-        else:
+
+        if not success:
             log.warning("application.linkedin_auth_failed")
-        return success
+            return False
+
+        # --- li_at verification gate ---
+        # Confirm the LinkedIn session token is actually present in the
+        # browser context. Without this check, a stale or captcha-flagged
+        # session can produce a false "authenticated" state: LinkedIn's SPA
+        # navigates to /feed/ via client-side routing (without a server-side
+        # auth exchange), is_authenticated sees the /feed/ URL and returns
+        # True, but li_at is never set so job-view pages render as guest.
+        cookies = await manager.get_cookies(["https://www.linkedin.com"])
+        li_at_present = any(c.get("name") == "li_at" for c in cookies)
+
+        if not li_at_present:
+            log.warning(
+                "application.linkedin_auth_ok_but_no_li_at_forcing_full_login",
+                page_url=page.url,
+            )
+            # Force a server-side auth exchange by navigating to /login.
+            # The server redirects to /feed/ and issues li_at only when
+            # credentials are genuinely validated — no SPA false positive.
+            try:
+                await page.goto(
+                    "https://www.linkedin.com/login",
+                    wait_until="domcontentloaded",
+                    timeout=15_000,
+                )
+            except Exception:
+                log.warning("application.linkedin_login_nav_failed", exc_info=True)
+                return False
+            await behavior.reading_pause(800)
+            success = await provider.authenticate(
+                page,
+                email=email,
+                password=password,
+                behavior=behavior,
+            )
+            if not success:
+                log.warning("application.linkedin_forced_login_failed")
+                return False
+            # Final verification — if li_at is still missing after a full
+            # credential entry the account needs manual intervention
+            # (captcha, verification email, etc.).
+            cookies = await manager.get_cookies(["https://www.linkedin.com"])
+            li_at_present = any(c.get("name") == "li_at" for c in cookies)
+            if not li_at_present:
+                log.error("application.linkedin_li_at_missing_after_forced_login")
+                return False
+
+        log.info("application.linkedin_auth_ok", page_url=page.url)
+        return True
     except Exception:
         log.exception("application.linkedin_auth_crashed")
         return False

@@ -53,19 +53,33 @@ _STRATEGY = SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
 # but without "Easy". We detect both and distinguish them in code.
 
 _EASY_APPLY_BUTTON_SELECTORS = (
+    # aria-label based (most stable — LinkedIn keeps these for accessibility)
     "button[aria-label^='Easy Apply']",
+    "a[aria-label^='Easy Apply']",
+    # Class-based fallbacks (LinkedIn rewrites these periodically)
     ".jobs-apply-button",
     ".jobs-s-apply button",
+    ".jobs-s-apply a",
 )
 
 # Catches the non-Easy-Apply case (external redirect). The starts-with anchor
 # keeps us from matching unrelated controls like "Apply filters" or "Apply
 # location". This is a secondary probe — only used when Easy Apply selectors
 # return nothing.
+#
+# LinkedIn external Apply buttons (e.g. "Responses managed off LinkedIn") may
+# be rendered as <a> tags (hyperlinks to the employer's ATS) rather than
+# <button> elements. All selectors cover both element types.
 _APPLY_BUTTON_SELECTORS = (
     "button[aria-label^='Apply to']",
     "button[aria-label^='Apply on']",
     "button[aria-label='Apply']",
+    "a[aria-label^='Apply to']",
+    "a[aria-label^='Apply on']",
+    "a[aria-label='Apply']",
+    # LinkedIn external-redirect Apply is sometimes an artdeco anchor
+    "a.jobs-apply-button",
+    "a[data-control-name*='apply']",
 )
 
 _MODAL_SELECTORS = (
@@ -202,6 +216,32 @@ async def _locate_apply_button(page: Page) -> tuple[object | None, bool]:
         if not await btn.is_visible():
             continue
         return btn, False
+
+    # Broad fallback: scan all buttons and anchors on the page for "apply"
+    # text / aria-label. This catches LinkedIn UI variants where the class name
+    # changed and neither the primary nor secondary selectors matched (e.g.
+    # external-redirect Apply rendered as a plain <a> without artdeco classes).
+    # Only matches short labels to avoid false positives like "Apply filters".
+    _BROAD_CANDIDATES = "button, a[role='button'], a.artdeco-button, a[href]"
+    try:
+        candidates = await page.query_selector_all(_BROAD_CANDIDATES)
+        for el in candidates:
+            if not await el.is_visible():
+                continue
+            aria = (await el.get_attribute("aria-label") or "").lower().strip()
+            text = (await el.text_content() or "").lower().strip()
+            # Ignore long strings (nav links, "Apply filters", etc.)
+            if len(aria) > 120 or len(text) > 60:
+                continue
+            if "easy apply" in aria or "easy apply" in text:
+                return el, True
+            # "apply" must appear as a word boundary — skip "Applicants", etc.
+            if aria in ("apply",) or text in ("apply",):
+                return el, False
+            if aria.startswith("apply to ") or aria.startswith("apply on "):
+                return el, False
+    except Exception:
+        pass
 
     return None, False
 

@@ -29,6 +29,7 @@ from pipelines.job_agent.models.resume_tailoring import (
     ResumeTailoringPlan,
     TailoredResumeDocument,
 )
+from pipelines.job_agent.resume.age_up import age_up_profile
 from pipelines.job_agent.resume.applier import apply_tailoring_plan
 from pipelines.job_agent.resume.profile import format_profile_for_llm, load_master_profile
 from pipelines.job_agent.resume.renderer import render_resume_docx
@@ -42,6 +43,15 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+_AGE_UP_RESUME_ADDENDUM = """
+## Seniority Framing (Active)
+Frame the candidate as a mid-to-senior professional throughout:
+- General Dynamics / Electric Boat: four years of engineering experience, 2019-2023, progressing from Engineer I to Engineer II. Do not frame any phase as an internship or describe any work as early-career or entry-level. If rewriting EB bullets, lead with project scope and outcomes — not training, onboarding, or "first" experiences.
+- Professional summary: write for a senior/experienced-professional audience. No phrasing that signals recent graduation, "developing into", or "aspiring to". The summary should read as a peer addressing a hiring team, not a candidate seeking a first real job.
+- Bullet rewrites: project-owner framing. Lead with scope, responsibility, and outcome. Avoid "supported", "assisted", or "helped" — the candidate ran programs, built systems, and delivered results.
+- MIT Sloan MBA: treat as an active credential earned alongside real work, not the primary identity. Engineering experience and startup track record lead the narrative; the MBA reinforces analytical and business judgment.
+"""
 
 _ENGINE: TailoringEngine[
     JobAgentState,
@@ -170,8 +180,11 @@ def _on_skip(state: JobAgentState) -> None:
         state.tailored_listings = []
 
 
-def _load_profile(_state: JobAgentState, runtime: _Runtime) -> ResumeMasterProfile:
-    return load_master_profile(Path(runtime.settings.resume_master_profile_path))
+def _load_profile(state: JobAgentState, runtime: _Runtime) -> ResumeMasterProfile:
+    profile = load_master_profile(Path(runtime.settings.resume_master_profile_path))
+    if state.age_up:
+        return age_up_profile(profile)
+    return profile
 
 
 def _on_missing_context(state: JobAgentState, listing: JobListing, _runtime: _Runtime) -> None:
@@ -209,7 +222,7 @@ def _build_inventory_view(
 
 
 def _build_prompt(
-    _state: JobAgentState,
+    state: JobAgentState,
     listing: JobListing,
     analysis: JobAnalysisResult,
     _profile: ResumeMasterProfile,
@@ -221,7 +234,9 @@ def _build_prompt(
         candidate_profile_structured=inventory_view,
         positioning_rules=positioning_rules(analysis.domain_tags),
     )
-    logger.debug("tailoring.prompt_built", dedup_key=listing.dedup_key)
+    if state.age_up:
+        prompt += _AGE_UP_RESUME_ADDENDUM
+    logger.debug("tailoring.prompt_built", dedup_key=listing.dedup_key, age_up=state.age_up)
     return prompt
 
 

@@ -79,6 +79,7 @@ class JobAgentState:
     # Run metadata
     run_id: str = ""
     dry_run: bool = False
+    age_up: bool = False
 
 
 def coerce_state(value: Any) -> JobAgentState:

@@ -521,6 +521,117 @@ async def test_linkedin_auth_warmup_success_runs_submitter_and_saves_session(
     assert invalidated == []
 
 
+@pytest.mark.asyncio
+async def test_authenticate_linkedin_forces_login_when_li_at_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: provider.authenticate can return True based purely on the
+    /feed/ URL shortcut in is_authenticated without li_at being set in the
+    browser context (LinkedIn SPA navigates client-side without server auth).
+    _authenticate_linkedin must detect the missing li_at and force a full
+    login through /login, which triggers a real server-side auth exchange."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from pipelines.job_agent.application.node import _authenticate_linkedin
+
+    settings = MagicMock()
+    settings.linkedin_email = "test@example.com"
+    settings.linkedin_password.get_secret_value.return_value = "password123"
+
+    log = MagicMock()
+    log.warning = MagicMock()
+    log.info = MagicMock()
+    log.error = MagicMock()
+
+    page = MagicMock()
+    page.goto = AsyncMock()
+    page.url = "https://www.linkedin.com/feed/"
+    page.close = AsyncMock()
+
+    # First get_cookies call: no li_at (SPA false positive)
+    # Second get_cookies call (after forced /login): li_at present
+    manager = MagicMock()
+    manager.new_page = AsyncMock(return_value=page)
+    manager.get_cookies = AsyncMock(side_effect=[
+        [],  # first call: no li_at — SPA false positive
+        [{"name": "li_at", "value": "real-session-token"}],  # after forced /login
+    ])
+
+    authenticate_calls: list[str] = []
+
+    async def _fake_authenticate(page: object, *, email: str, password: str, behavior: object) -> bool:
+        authenticate_calls.append("called")
+        return True
+
+    # HumanBehavior's reading_pause is awaited — make it an AsyncMock.
+    mock_behavior = MagicMock()
+    mock_behavior.reading_pause = AsyncMock()
+
+    with patch(
+        "pipelines.job_agent.discovery.providers.linkedin.LinkedInProvider",
+    ) as _mock_cls, patch(
+        "pipelines.job_agent.application.node.HumanBehavior",
+        return_value=mock_behavior,
+    ):
+        _mock_cls.return_value.base_domain.return_value = "www.linkedin.com"
+        _mock_cls.return_value.authenticate = _fake_authenticate
+        result = await _authenticate_linkedin(manager, settings, log)
+
+    assert result is True
+    # authenticate must be called twice: initial + forced /login path
+    assert len(authenticate_calls) == 2
+    log.warning.assert_any_call(
+        "application.linkedin_auth_ok_but_no_li_at_forcing_full_login",
+        page_url=page.url,
+    )
+    log.info.assert_called_with("application.linkedin_auth_ok", page_url=page.url)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_linkedin_fails_when_li_at_missing_after_forced_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the forced /login path also fails to produce li_at, auth must
+    return False so _run_browser_batch can invalidate the session and retry."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from pipelines.job_agent.application.node import _authenticate_linkedin
+
+    settings = MagicMock()
+    settings.linkedin_email = "test@example.com"
+    settings.linkedin_password.get_secret_value.return_value = "password123"
+
+    log = MagicMock()
+    log.warning = MagicMock()
+    log.error = MagicMock()
+
+    page = MagicMock()
+    page.goto = AsyncMock()
+    page.url = "https://www.linkedin.com/feed/"
+    page.close = AsyncMock()
+
+    manager = MagicMock()
+    manager.new_page = AsyncMock(return_value=page)
+    # Both calls return no li_at: forced login also failed to produce a session
+    manager.get_cookies = AsyncMock(return_value=[])
+
+    mock_behavior = MagicMock()
+    mock_behavior.reading_pause = AsyncMock()
+
+    with patch(
+        "pipelines.job_agent.discovery.providers.linkedin.LinkedInProvider",
+    ) as _mock_cls, patch(
+        "pipelines.job_agent.application.node.HumanBehavior",
+        return_value=mock_behavior,
+    ):
+        _mock_cls.return_value.base_domain.return_value = "www.linkedin.com"
+        _mock_cls.return_value.authenticate = AsyncMock(return_value=True)
+        result = await _authenticate_linkedin(manager, settings, log)
+
+    assert result is False
+    log.error.assert_called_with("application.linkedin_li_at_missing_after_forced_login")
+
+
 def test_graph_routes_cover_letter_to_application_before_tracking() -> None:
     graph = build_graph()
     graph_view = graph.get_graph()

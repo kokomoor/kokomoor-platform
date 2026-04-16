@@ -73,6 +73,12 @@ class TailoringSpec(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Document
     ) = None
     # Upper bound on concurrent in-flight LLM requests. 1 = sequential.
     concurrency: int = 1
+    # Number of retry attempts passed to structured_complete on validation failure.
+    max_retries: int = 2
+    # When True, if structured_complete exhausts retries with the semantic
+    # validator, one additional attempt runs without any validator so that
+    # something is always rendered. Logged loudly as a fallback event.
+    fallback_without_validator: bool = False
 
 
 class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, DocumentT, RuntimeT]):
@@ -121,17 +127,37 @@ class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Docume
                         plan_validator = spec.build_plan_validator(
                             state, item, context, inventory, runtime
                         )
-                    plan = await structured_complete(
-                        llm_client,
-                        prompt,
+                    _sc_kwargs = dict(
                         response_model=spec.plan_model_type,
                         model=spec.get_model(state, runtime),
                         max_tokens=spec.get_max_tokens(state, runtime),
                         run_id=spec.get_run_id(state),
                         system_prefix=cached_system,
                         cache_system=cached_system is not None,
-                        validator=plan_validator,
+                        max_retries=spec.max_retries,
                     )
+                    try:
+                        plan = await structured_complete(
+                            llm_client,
+                            prompt,
+                            validator=plan_validator,
+                            **_sc_kwargs,
+                        )
+                    except Exception as primary_exc:
+                        if spec.fallback_without_validator and plan_validator is not None:
+                            logger.warning(
+                                "tailoring.fallback_without_validator_fired",
+                                workflow=spec.name,
+                                original_error=str(primary_exc)[:300],
+                            )
+                            plan = await structured_complete(
+                                llm_client,
+                                prompt,
+                                validator=None,
+                                **{**_sc_kwargs, "max_retries": 1},
+                            )
+                        else:
+                            raise
                     spec.validate_plan(state, item, context, inventory, plan, runtime)
                     document = spec.apply_plan(state, item, context, inventory, plan, runtime)
                     output_path = spec.get_output_path(state, item, runtime)
