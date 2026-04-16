@@ -58,6 +58,14 @@ async def application_node(
     settings = get_settings()
     log = logger.bind(run_id=state.run_id)
 
+    # Lazily create the LLM client the same way every other LLM-backed node
+    # does. Without this, Easy Apply fields that the deterministic field_mapper
+    # can't fill with confidence ≥ 0.8 are silently left blank — required
+    # fields in the wizard go unanswered.
+    if llm_client is None:
+        from core.llm import AnthropicClient
+        llm_client = AnthropicClient()
+
     if not state.tailored_listings:
         log.info("application.no_tailored_listings")
         state.application_results = []
@@ -116,93 +124,25 @@ async def application_node(
             await _handle_attempt_outcome(state, listing, attempt, dedup_store)
             await _jittered_delay(index, len(api_listings), state.dry_run, settings)
 
-    # 2. Browser Submissions — single BrowserManager lifecycle for the batch
+    # 2. Browser Submissions — mirrors DiscoveryOrchestrator's auth pattern
+    #    exactly: try with loaded session, invalidate + retry fresh on failure.
     if browser_listings:
         session_store = SessionStore(Path("data/sessions"))
-        has_linkedin = any(
-            strategy == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
-            for _, strategy in browser_listings
+        batch_results, batch_pairs = await _run_browser_batch(
+            browser_listings=browser_listings,
+            profile=profile,
+            llm_client=llm_client,
+            settings=settings,
+            run_id=state.run_id,
+            dry_run=state.dry_run,
+            cache=cache,
+            session_store=session_store,
+            log=log,
         )
-        async with BrowserManager(storage_state=session_store.load("linkedin")) as manager:
-            # Warm up the session before touching any job URLs. The
-            # 2026-04-14 run loaded a freshly-saved discovery session,
-            # navigated straight to `/jobs/view/<id>`, and hit a
-            # logged-out render (gray "Me" silhouette, no Easy Apply
-            # modal wiring). Discovery had saved the session while
-            # captcha challenges were active, which leaves the cookies
-            # in a "flagged" state — valid enough for LinkedIn to serve
-            # the search results, stale enough to degrade into the
-            # public job-view when opened in a fresh context. Re-auth
-            # here shifts that failure from three opaque
-            # button-not-found errors into a single clean retry.
-            linkedin_auth_ok = False
-            if has_linkedin:
-                linkedin_auth_ok = await _ensure_linkedin_authenticated(
-                    manager, settings, log
-                )
-                if not linkedin_auth_ok:
-                    log.warning(
-                        "application.linkedin_auth_warmup_failed",
-                        listings=sum(
-                            1
-                            for _, s in browser_listings
-                            if s == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
-                        ),
-                    )
-
-            for index, (listing, strategy) in enumerate(browser_listings):
-                if (
-                    strategy == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY
-                    and not linkedin_auth_ok
-                ):
-                    attempt = ApplicationAttempt(
-                        dedup_key=listing.dedup_key,
-                        status="stuck",
-                        strategy=strategy.value,
-                        summary=(
-                            "LinkedIn authentication warmup failed; skipping "
-                            "Easy Apply to avoid cascading bot detection. "
-                            "Resolve the login (solve captcha in headed mode "
-                            "or refresh credentials) and retry."
-                        ),
-                    )
-                else:
-                    page = await manager.new_page()
-                    try:
-                        attempt = await _apply_with_retry(
-                            listing=listing,
-                            strategy=strategy,
-                            profile=profile,
-                            client=None,
-                            page=page,
-                            llm_client=llm_client,
-                            settings=settings,
-                            run_id=state.run_id,
-                            dry_run=state.dry_run,
-                            cache=cache,
-                        )
-                    finally:
-                        await page.close()
-
-                attempts.append(attempt)
-                attempt_pairs.append((listing, attempt))
-                await _handle_attempt_outcome(state, listing, attempt, dedup_store)
-                await _jittered_delay(index, len(browser_listings), state.dry_run, settings)
-
-            # Persist the authenticated state so the next run inherits
-            # a clean session. If warmup failed, invalidate instead so
-            # we don't re-poison the next run.
-            if has_linkedin:
-                if linkedin_auth_ok:
-                    try:
-                        await session_store.save("linkedin", manager)
-                    except Exception:
-                        log.warning(
-                            "application.session_save_failed",
-                            exc_info=True,
-                        )
-                else:
-                    session_store.invalidate("linkedin")
+        for listing, attempt in batch_pairs:
+            attempts.append(attempt)
+            attempt_pairs.append((listing, attempt))
+            await _handle_attempt_outcome(state, listing, attempt, dedup_store)
 
     dedup_store.close()
 
@@ -220,23 +160,132 @@ async def application_node(
     return state
 
 
-async def _ensure_linkedin_authenticated(
+async def _run_browser_batch(
+    *,
+    browser_listings: list[tuple[Any, SubmissionStrategy]],
+    profile: Any,
+    llm_client: Any,
+    settings: Settings,
+    run_id: str,
+    dry_run: bool,
+    cache: Any,
+    session_store: SessionStore,
+    log: Any,
+) -> tuple[list[ApplicationAttempt], list[tuple[Any, ApplicationAttempt]]]:
+    """Run browser submissions using the same auth pattern as DiscoveryOrchestrator.
+
+    Tries with the loaded LinkedIn session first. If authentication fails,
+    invalidates the session and retries with a clean browser context — exactly
+    the two-attempt pattern the discovery phase uses. This ensures the
+    application engine never gets stuck behind a stale or captcha-flagged
+    session without a recovery path.
+    """
+    has_linkedin = any(
+        s == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY for _, s in browser_listings
+    )
+
+    storage = session_store.load("linkedin") if has_linkedin else None
+    had_session = storage is not None
+
+    # Each element of this list is (storage_state_to_try, is_retry).
+    # We try the loaded session first; if LinkedIn auth fails we wipe the
+    # session file and try once more with a fresh context (storage_state=None).
+    candidates: list[dict[str, Any] | None] = [storage]
+    if had_session:
+        candidates.append(None)  # retry slot
+
+    for attempt_idx, storage_state in enumerate(candidates):
+        is_retry = attempt_idx > 0
+        async with BrowserManager(storage_state=storage_state) as manager:
+            # Authenticate using LinkedInProvider — the same code path
+            # that discovery uses so we get all auth modes (welcome-back,
+            # password-only, full login, captcha pause).
+            if has_linkedin:
+                auth_ok = await _authenticate_linkedin(manager, settings, log)
+            else:
+                auth_ok = True  # non-LinkedIn browser providers skip auth
+
+            if not auth_ok:
+                if had_session and not is_retry:
+                    # First attempt failed: wipe poisoned session, let the
+                    # loop run again with a fresh context.
+                    session_store.invalidate("linkedin")
+                    log.info("application.linkedin_session_invalidated_retrying_fresh")
+                    continue
+                # Either no session to invalidate, or the fresh-context
+                # attempt also failed. Mark every LinkedIn listing stuck.
+                log.warning(
+                    "application.linkedin_auth_failed_all_attempts",
+                    had_session=had_session,
+                )
+                stuck: list[ApplicationAttempt] = []
+                pairs: list[tuple[Any, ApplicationAttempt]] = []
+                for listing, strategy in browser_listings:
+                    if strategy == SubmissionStrategy.TEMPLATE_LINKEDIN_EASY_APPLY:
+                        a = ApplicationAttempt(
+                            dedup_key=listing.dedup_key,
+                            status="stuck",
+                            strategy=strategy.value,
+                            summary=(
+                                "LinkedIn authentication failed on both session and "
+                                "fresh-context attempts. Resolve the login (solve "
+                                "captcha in headed mode or refresh credentials) and "
+                                "retry."
+                            ),
+                        )
+                        stuck.append(a)
+                        pairs.append((listing, a))
+                return stuck, pairs
+
+            # Auth succeeded — run the batch.
+            results: list[ApplicationAttempt] = []
+            result_pairs: list[tuple[Any, ApplicationAttempt]] = []
+            for index, (listing, strategy) in enumerate(browser_listings):
+                page = await manager.new_page()
+                try:
+                    attempt = await _apply_with_retry(
+                        listing=listing,
+                        strategy=strategy,
+                        profile=profile,
+                        client=None,
+                        page=page,
+                        llm_client=llm_client,
+                        settings=settings,
+                        run_id=run_id,
+                        dry_run=dry_run,
+                        cache=cache,
+                    )
+                finally:
+                    await page.close()
+
+                results.append(attempt)
+                result_pairs.append((listing, attempt))
+                await _jittered_delay(index, len(browser_listings), dry_run, settings)
+
+            # Persist the refreshed session so the next run starts clean.
+            if has_linkedin:
+                try:
+                    await session_store.save("linkedin", manager)
+                except Exception:
+                    log.warning("application.session_save_failed", exc_info=True)
+
+            return results, result_pairs
+
+    # Should be unreachable, but satisfy type checker.
+    return [], []
+
+
+async def _authenticate_linkedin(
     manager: BrowserManager,
     settings: Settings,
     log: Any,
 ) -> bool:
-    """Verify the browser context can render LinkedIn in a logged-in state.
+    """Authenticate LinkedIn within an open BrowserManager context.
 
-    Warms up the context against ``www.linkedin.com``, checks
-    ``LinkedInProvider.is_authenticated`` (positive DOM + URL signals),
-    and falls back to the full login flow when the cookies loaded from
-    the session file don't resolve into an authenticated view. Reuses
-    the same provider the discovery phase uses so we get free coverage
-    of every auth mode (welcome-back card, password-only, full login).
-
-    A return value of ``False`` is authoritative: the caller should
-    short-circuit every LinkedIn listing in the batch and avoid
-    re-saving the poisoned context back to disk.
+    Navigates to www.linkedin.com and delegates to LinkedInProvider —
+    the same provider used by DiscoveryOrchestrator — so all auth modes
+    (welcome-back card, password-only, full login) are covered without
+    duplicating logic.
     """
     from pipelines.job_agent.discovery.providers.linkedin import LinkedInProvider
 
@@ -262,27 +311,22 @@ async def _ensure_linkedin_authenticated(
 
         await behavior.reading_pause(800)
 
-        if await provider.is_authenticated(page):
-            log.info("application.linkedin_session_valid")
-            return True
-
-        log.info("application.linkedin_session_stale_reauthenticating")
-        try:
-            success = await provider.authenticate(
-                page,
-                email=email,
-                password=password,
-                behavior=behavior,
-            )
-        except Exception:
-            log.exception("application.linkedin_reauth_crashed")
-            return False
-
-        if success and await provider.is_authenticated(page):
-            log.info("application.linkedin_reauth_success")
-            return True
-
-        log.warning("application.linkedin_reauth_failed")
+        # LinkedInProvider.authenticate() already checks is_authenticated
+        # internally and short-circuits if the session is already valid,
+        # so calling it unconditionally is safe and idempotent.
+        success = await provider.authenticate(
+            page,
+            email=email,
+            password=password,
+            behavior=behavior,
+        )
+        if success:
+            log.info("application.linkedin_auth_ok")
+        else:
+            log.warning("application.linkedin_auth_failed")
+        return success
+    except Exception:
+        log.exception("application.linkedin_auth_crashed")
         return False
     finally:
         await page.close()

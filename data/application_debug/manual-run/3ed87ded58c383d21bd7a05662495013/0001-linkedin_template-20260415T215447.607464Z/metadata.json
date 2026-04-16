@@ -1,0 +1,11 @@
+{
+  "run_id": "manual-run",
+  "source": "3ed87ded58c383d21bd7a05662495013",
+  "stage": "linkedin_template",
+  "reason": "Easy Apply button not found",
+  "error": "",
+  "captured_at_utc": "2026-04-15T21:54:47.607695+00:00",
+  "extra": {},
+  "page_url": "https://www.linkedin.com/jobs/view/4286644657/",
+  "page_title": "Canonical hiring Embedded Linux Field Engineering Manager (Americas only) in NAMER | LinkedIn"
+}

@@ -289,7 +289,7 @@ async def test_stuck_status_is_logged_at_info_level(
     async def _warmup_ok(manager: object, settings: object, log: object) -> bool:
         return True
 
-    monkeypatch.setattr(node_module, "_ensure_linkedin_authenticated", _warmup_ok)
+    monkeypatch.setattr(node_module, "_authenticate_linkedin", _warmup_ok)
 
     captured: list[tuple[str, dict[str, object]]] = []
 
@@ -358,7 +358,7 @@ async def test_linkedin_auth_warmup_failure_short_circuits_listings(
     ) -> bool:
         return False
 
-    monkeypatch.setattr(node_module, "_ensure_linkedin_authenticated", _warmup_fail)
+    monkeypatch.setattr(node_module, "_authenticate_linkedin", _warmup_fail)
 
     class _FakeBrowserManager:
         async def __aenter__(self) -> _FakeBrowserManager:
@@ -417,12 +417,12 @@ async def test_linkedin_auth_warmup_failure_short_circuits_listings(
     for result in out.application_results:
         assert result.status == "stuck"
         assert result.strategy == "template_linkedin_easy_apply"
-        assert "warmup" in result.summary.lower()
+        assert "authentication failed" in result.summary.lower()
 
     assert invalidated == ["linkedin"], (
-        "Poisoned session must be invalidated when warmup fails."
+        "Poisoned session must be invalidated when auth fails."
     )
-    assert saved == [], "Session must not be saved when warmup fails."
+    assert saved == [], "Session must not be saved when auth fails."
 
 
 @pytest.mark.asyncio
@@ -460,7 +460,7 @@ async def test_linkedin_auth_warmup_success_runs_submitter_and_saves_session(
     ) -> bool:
         return True
 
-    monkeypatch.setattr(node_module, "_ensure_linkedin_authenticated", _warmup_ok)
+    monkeypatch.setattr(node_module, "_authenticate_linkedin", _warmup_ok)
 
     class _FakePage:
         async def close(self) -> None:

@@ -1,0 +1,11 @@
+{
+  "run_id": "manual-run",
+  "source": "c127bf50a9e2695c51cdae97ac75d114",
+  "stage": "linkedin_template",
+  "reason": "Easy Apply button not found",
+  "error": "",
+  "captured_at_utc": "2026-04-15T21:28:51.983898+00:00",
+  "extra": {},
+  "page_url": "https://www.linkedin.com/jobs/view/4286648305/",
+  "page_title": "Canonical hiring Engineering Manager - App Stores in NAMER | LinkedIn"
+}
