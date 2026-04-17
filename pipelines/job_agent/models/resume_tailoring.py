@@ -16,16 +16,43 @@ from pydantic import BaseModel, Field
 
 
 class MasterBullet(BaseModel):
-    """A single resume bullet with stable ID for LLM referencing."""
+    """A single resume bullet with stable ID for LLM referencing.
+
+    Schema v2 adds:
+      anchor: bool — if True, this bullet is load-bearing for its section.
+        The applier auto-prepends it to the section's rendered bullet list
+        even if the LLM's plan did not select it, guaranteeing it appears.
+      source_material: str — verbose prose (facts, scope, stack, outcomes)
+        consumed only by the `recast` op. The tailoring LLM may compose
+        new bullet text using only facts present in source_material or
+        `text`, preserving numbers / proper nouns / technology names
+        verbatim. Applier enforces length parity and entity grounding.
+    """
 
     id: str
     text: str
     tags: list[str] = Field(default_factory=list)
     variants: dict[str, str] = Field(default_factory=dict)
+    anchor: bool = False
+    source_material: str = ""
 
 
 class MasterExperience(BaseModel):
-    """An experience entry in the master resume profile."""
+    """An experience entry in the master resume profile.
+
+    Schema v2 adds:
+      tier: "pinned" | "optional" | "supplementary"
+        * pinned — section MUST appear in every tailored resume; applier
+          auto-inserts it if the LLM forgot.
+        * optional — section MAY appear when at least one bullet has a
+          tag matching the job's domain tags.
+        * supplementary — never rendered in the main experience block;
+          effectively a marker (supplementary content belongs in the
+          top-level supplementary_projects list).
+      Default is "pinned" for backward compatibility: v1 profiles without
+      explicit tier treat every section as must-include, preserving the
+      user's full work history by default.
+    """
 
     id: str
     company: str
@@ -33,11 +60,16 @@ class MasterExperience(BaseModel):
     dates: str = ""
     location: str = ""
     subtitle: str = ""
+    tier: Literal["pinned", "optional", "supplementary"] = "pinned"
     bullets: list[MasterBullet]
 
 
 class MasterEducation(BaseModel):
-    """An education entry in the master resume profile."""
+    """An education entry in the master resume profile.
+
+    Education sections default to `tier="pinned"` like experience: they
+    are always-include unless explicitly marked optional.
+    """
 
     id: str
     school: str
@@ -45,6 +77,7 @@ class MasterEducation(BaseModel):
     graduation: str
     gpa: str = ""
     location: str = ""
+    tier: Literal["pinned", "optional"] = "pinned"
     bullets: list[MasterBullet] = Field(default_factory=list)
 
 
@@ -77,12 +110,34 @@ class CoverLetterPreferences(BaseModel):
     narrative_themes: list[str] = Field(default_factory=list)
 
 
+class SupplementaryProject(BaseModel):
+    """A personal project rendered under 'Additional Information'.
+
+    These are not work experience — they exist separately so personal
+    projects (side projects, OSS contributions, portfolio pieces) can be
+    surfaced without competing for experience-section real estate. The
+    tailoring plan may include them or omit them per-role via
+    ``ResumeTailoringPlan.supplementary_project_ids``.
+    """
+
+    id: str
+    name: str
+    url: str = ""
+    text: str
+    tags: list[str] = Field(default_factory=list)
+    variants: dict[str, str] = Field(default_factory=dict)
+    source_material: str = ""
+
+
 class ResumeMasterProfile(BaseModel):
     """Complete master resume profile.
 
     Contains *all* possible experience bullets with stable IDs,
     tags for domain filtering, and optional length variants.
     Loaded once per tailoring run from the candidate_profile YAML.
+
+    Schema v2 adds ``supplementary_projects`` (personal projects rendered
+    in the Additional Information section, not in Experience).
     """
 
     schema_version: int = 1
@@ -96,7 +151,15 @@ class ResumeMasterProfile(BaseModel):
     education: list[MasterEducation]
     experience: list[MasterExperience]
     skills: MasterSkills
+    supplementary_projects: list[SupplementaryProject] = Field(default_factory=list)
     cover_letter: CoverLetterPreferences | None = None
+
+    def get_supplementary_project(self, project_id: str) -> SupplementaryProject | None:
+        """Look up a supplementary project by ID."""
+        for p in self.supplementary_projects:
+            if p.id == project_id:
+                return p
+        return None
 
     def get_bullet(self, bullet_id: str) -> MasterBullet | None:
         """Look up a bullet by ID across all experience and education sections."""
@@ -161,10 +224,23 @@ class JobAnalysisResult(BaseModel):
 
 
 class BulletOp(BaseModel):
-    """Operation to apply to a single resume bullet."""
+    """Operation to apply to a single resume bullet.
+
+    Ops:
+      - keep: use the master bullet's text verbatim.
+      - shorten: use the ``short`` variant if defined, else fall back to text.
+      - recast: produce new text using only facts present in the bullet's
+        master ``text`` or ``source_material``. All numbers, dollar
+        amounts, percentages, and proper nouns must appear verbatim.
+        Word count must not exceed the master's by more than 20%. The
+        applier validates both constraints and falls back to ``keep`` on
+        failure.
+      - rewrite: deprecated alias for recast, retained for backward
+        compatibility with older plans. Treated identically to recast.
+    """
 
     bullet_id: str
-    op: Literal["keep", "shorten", "rewrite"]
+    op: Literal["keep", "shorten", "recast", "rewrite"]
     rewrite_text: str | None = None
 
 
@@ -180,6 +256,10 @@ class ResumeTailoringPlan(BaseModel):
 
     References master-profile bullet IDs so the applier can
     deterministically assemble the tailored resume.
+
+    Schema v2 adds ``supplementary_project_ids`` — the subset of
+    supplementary projects the LLM has chosen to surface in this tailored
+    resume's Additional Information section.
     """
 
     summary: str
@@ -187,6 +267,7 @@ class ResumeTailoringPlan(BaseModel):
     education_sections: list[SectionPlan]
     bullet_ops: list[BulletOp]
     skills_to_highlight: list[str]
+    supplementary_project_ids: list[str] = Field(default_factory=list)
 
 
 # ── Tailored Document (post-application) ──────────────────────────────
@@ -221,6 +302,18 @@ class TailoredEducation(BaseModel):
     bullets: list[TailoredBullet]
 
 
+class TailoredSupplementaryProject(BaseModel):
+    """A supplementary project entry in the tailored resume.
+
+    Rendered as a single line under Additional Information / Projects.
+    """
+
+    id: str
+    name: str
+    url: str = ""
+    text: str
+
+
 class TailoredResumeDocument(BaseModel):
     """Final structured resume — input to the .docx renderer."""
 
@@ -236,3 +329,4 @@ class TailoredResumeDocument(BaseModel):
     education: list[TailoredEducation]
     skills_highlight: list[str]
     additional_info: list[str] = Field(default_factory=list)
+    supplementary_projects: list[TailoredSupplementaryProject] = Field(default_factory=list)

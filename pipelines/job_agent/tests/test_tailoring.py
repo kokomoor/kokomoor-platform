@@ -305,6 +305,9 @@ class TestApplier:
         assert doc.experience[0].bullets[0].text == "Custom rewritten bullet text"
 
     def test_unknown_section_skipped(self, master_profile: ResumeMasterProfile) -> None:
+        """Unknown section ids in the plan are dropped; pinned sections from
+        the profile are still auto-inserted (the tier guarantee overrides an
+        incomplete plan). Optional sections absent from the plan stay hidden."""
         plan = ResumeTailoringPlan(
             summary="Test.",
             experience_sections=[
@@ -315,7 +318,10 @@ class TestApplier:
             skills_to_highlight=[],
         )
         doc = apply_tailoring_plan(master_profile, plan)
-        assert len(doc.experience) == 0
+        companies = [e.company for e in doc.experience]
+        # Pinned exp_beta auto-inserts; optional exp_alpha stays out.
+        assert "Beta Inc" in companies
+        assert "Alpha Corp" not in companies
 
     def test_unknown_bullet_skipped(self, master_profile: ResumeMasterProfile) -> None:
         plan = ResumeTailoringPlan(
