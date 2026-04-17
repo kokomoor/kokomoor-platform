@@ -351,25 +351,85 @@ class LinkedInProvider(BaseProvider):
         # Click the remembered account profile button.  The real selector
         # from LinkedIn's HTML: button.member-profile__details with an
         # aria-label like "Login as <Name>".
+        #
+        # IMPORTANT: human_click uses page.mouse.click(x, y) with Bezier
+        # mouse movement, which can raise Playwright TimeoutError when the
+        # element's stability wait times out in headless mode (silently
+        # swallowed by except Exception: continue). We therefore use a
+        # layered strategy that degrades gracefully:
+        #   1. human_click (best stealth)
+        #   2. el.click(force=True) (bypasses stability waits)
+        #   3. page.evaluate JS click (always works, lowest stealth)
         account_selectors = (
             "button.member-profile__details",
             "button[aria-label^='Login as']",
             ".member-profile-container button",
             ".artdeco-list__item button",
             "#rememberme-div button",
+            # Broader fallback: any clickable item in the member list
+            ".memberList-container .artdeco-list__item",
+            ".memberList-container li",
         )
         for sel in account_selectors:
+            el = None
             try:
                 el = await page.query_selector(sel)
-                if el:
-                    await behavior.between_actions_pause(min_s=0.8, max_s=2.0)
-                    await behavior.human_click(page, el)
-                    with contextlib.suppress(Exception):
-                        await page.wait_for_load_state("domcontentloaded", timeout=10_000)
-                    logger.info("linkedin_welcome_back_account_clicked", selector=sel)
-                    return True
             except Exception:
                 continue
+            if el is None:
+                continue
+
+            await behavior.between_actions_pause(min_s=0.5, max_s=1.5)
+
+            clicked = False
+            # Layer 1: human-like mouse movement (best for stealth)
+            try:
+                await behavior.human_click(page, el)
+                clicked = True
+            except Exception:
+                logger.debug("linkedin_welcome_back_human_click_failed", selector=sel)
+
+            # Layer 2: Playwright direct click bypassing stability checks
+            if not clicked:
+                try:
+                    await el.click(force=True)
+                    clicked = True
+                except Exception:
+                    logger.debug("linkedin_welcome_back_force_click_failed", selector=sel)
+
+            # Layer 3: JavaScript direct click — always fires
+            if not clicked:
+                try:
+                    await page.evaluate("(el) => el.click()", el)
+                    clicked = True
+                except Exception:
+                    logger.debug("linkedin_welcome_back_js_click_failed", selector=sel)
+
+            if clicked:
+                with contextlib.suppress(Exception):
+                    await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                logger.info("linkedin_welcome_back_account_clicked", selector=sel)
+                return True
+
+        # All tile selectors failed. Fall back to the "Sign in using another
+        # account" button, which navigates to the standard /login form where
+        # _standard_login can enter full credentials.
+        try:
+            other_btn = await page.query_selector(
+                "button.signin-other-account, button.artdeco-list__item.signin-other-account"
+            )
+            if other_btn:
+                await behavior.between_actions_pause(min_s=0.5, max_s=1.0)
+                with contextlib.suppress(Exception):
+                    await other_btn.click(force=True)
+                with contextlib.suppress(Exception):
+                    await page.wait_for_load_state("domcontentloaded", timeout=8_000)
+                logger.info("linkedin_welcome_back_clicked_sign_in_other_account")
+                # Returning False here so authenticate() falls through to
+                # _standard_login on the now-visible /login form.
+                return False
+        except Exception:
+            pass
 
         logger.warning("linkedin_welcome_back_no_account_button", url=page.url)
         return False

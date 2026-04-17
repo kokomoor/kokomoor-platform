@@ -68,7 +68,7 @@ def render_resume_docx(doc: TailoredResumeDocument, output_path: Path) -> Path:
 
     _add_spacer(document)
 
-    if doc.additional_info or doc.clearance:
+    if doc.additional_info or doc.clearance or doc.supplementary_projects:
         _render_additional_info(document, doc)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,6 +344,16 @@ def _render_additional_info(document: Any, doc: TailoredResumeDocument) -> None:
     for item in doc.additional_info:
         _add_bullet_para(document, item)
 
+    # Supplementary projects are rendered as one bulleted line per
+    # project: "Name — descriptive text (url)". Personal projects like
+    # kokomoor-platform live here rather than in Experience so they do
+    # not compete with real work history for section real estate.
+    for proj in doc.supplementary_projects:
+        line = proj.text
+        if proj.url and proj.url not in line:
+            line = f"{line} ({proj.url})"
+        _add_bullet_para(document, line)
+
 
 # -- markdown preview ------------------------------------------------------
 
@@ -396,11 +406,16 @@ def _render_markdown_preview(doc: TailoredResumeDocument, path: Path) -> None:
         lines.append(f"- {', '.join(doc.skills_highlight)}")
         lines.append("")
 
-    if doc.additional_info or doc.clearance:
+    if doc.additional_info or doc.clearance or doc.supplementary_projects:
         lines.append("## ADDITIONAL INFORMATION")
         lines.append("")
         for item in doc.additional_info:
             lines.append(f"- {item}")
+        for proj in doc.supplementary_projects:
+            line = proj.text
+            if proj.url and proj.url not in line:
+                line = f"{line} ({proj.url})"
+            lines.append(f"- {line}")
         lines.append("")
 
     try:

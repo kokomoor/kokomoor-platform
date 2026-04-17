@@ -7,10 +7,9 @@ from pathlib import Path
 import pytest
 
 from pipelines.job_agent.application.field_mapper import (
-    _FIELD_PATTERNS,
+    _MAPPER,
+    FieldMapper,
     FieldMapping,
-    _fuzzy_match_option,
-    _normalize_label,
     map_field,
 )
 from pipelines.job_agent.models import load_application_profile
@@ -19,6 +18,15 @@ from pipelines.job_agent.models.application import _load_cached
 _EXAMPLE_PATH = (
     Path(__file__).resolve().parents[1] / "context" / "candidate_application.example.yaml"
 )
+
+
+@pytest.fixture(autouse=True)
+def _ensure_mapper() -> None:
+    """Ensure the global _MAPPER singleton is initialized before tests."""
+    global _MAPPER
+    from pipelines.job_agent.application import field_mapper
+    if field_mapper._MAPPER is None:
+        field_mapper._MAPPER = FieldMapper()
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +44,9 @@ def profile() -> object:
 # ---------------------------------------------------------------------------
 
 
+def _mapper() -> FieldMapper:
+    return FieldMapper()
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -48,7 +59,7 @@ def profile() -> object:
     ],
 )
 def test_normalize_label(raw: str, expected: str) -> None:
-    assert _normalize_label(raw) == expected
+    assert _mapper()._normalize_label(raw) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +110,11 @@ _EXACT_CASES: list[tuple[str, str, str]] = [
     ("Disability", "demographics", "I do not wish to answer"),
 ]
 
-
 def test_exact_cases_cover_every_pattern() -> None:
     """Guardrail: every entry in _FIELD_PATTERNS is exercised above."""
-    covered = {_normalize_label(label) for label, _, _ in _EXACT_CASES}
-    assert covered == set(_FIELD_PATTERNS.keys())
+    mapper = _mapper()
+    covered = {mapper._normalize_label(label) for label, _, _ in _EXACT_CASES}
+    assert covered == set(mapper._patterns.keys())
 
 
 @pytest.mark.parametrize(("label", "expected_source", "expected_value"), _EXACT_CASES)
@@ -198,10 +209,10 @@ def test_select_no_match_no_decline_returns_reduced_confidence(
     profile.demographics.gender = "Attack Helicopter"  # type: ignore[attr-defined]
     options = ["Male", "Female", "Non-Binary"]
     result = map_field("Gender", "select", options, profile)  # type: ignore[arg-type]
-    # No fuzzy match, no decline — fall through to raw value with reduced confidence.
-    assert result.value == "Attack Helicopter"
-    assert result.confidence == pytest.approx(0.5)
-    assert result.source == "demographics"
+    # No fuzzy match, no decline — fall through to UNMAPPED for LLM escalation
+    assert result.value == ""
+    assert result.confidence == 0.0
+    assert result.source == "unmapped"
 
 
 # ---------------------------------------------------------------------------
@@ -227,13 +238,11 @@ def test_unknown_label_with_options_is_unmapped(profile: object) -> None:
 
 
 def test_fuzzy_match_exact_insensitive() -> None:
-    assert _fuzzy_match_option("yes", ["Yes", "No"]) == "Yes"
-
+    assert _mapper()._fuzzy_match_option("yes", ["Yes", "No"]) == "Yes"
 
 def test_fuzzy_match_below_threshold_returns_none() -> None:
-    assert _fuzzy_match_option("foo", ["bar", "baz", "qux"]) is None
-
+    assert _mapper()._fuzzy_match_option("foo", ["bar", "baz", "qux"]) is None
 
 def test_fuzzy_match_empty_inputs_return_none() -> None:
-    assert _fuzzy_match_option("", ["Yes"]) is None
-    assert _fuzzy_match_option("Yes", []) is None
+    assert _mapper()._fuzzy_match_option("", ["Yes"]) is None
+    assert _mapper()._fuzzy_match_option("Yes", []) is None

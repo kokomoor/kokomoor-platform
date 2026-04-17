@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 if TYPE_CHECKING:
-    from playwright.async_api import ElementHandle, Page
+    from playwright.async_api import ElementHandle, Frame, Page
 
 logger = structlog.get_logger(__name__)
 
@@ -58,6 +58,9 @@ class ElementInfo:
     options: list[str] = field(default_factory=list)
     required: bool = False
     disabled: bool = False
+    maxlength: int | None = None
+    automation_id: str = ""
+    test_id: str = ""
 
     def to_prompt_line(self) -> str:
         """One-line summary for inclusion in an LLM prompt."""
@@ -77,6 +80,8 @@ class ElementInfo:
             parts.append("required")
         if self.disabled:
             parts.append("disabled")
+        if self.maxlength:
+            parts.append(f"maxlength={self.maxlength}")
         return " ".join(parts)
 
 
@@ -87,6 +92,7 @@ class FormInfo:
     action: str
     method: str
     fields: list[ElementInfo] = field(default_factory=list)
+    frame_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,7 +122,8 @@ class PageState:
 
         if self.forms:
             for fi, form in enumerate(self.forms):
-                lines.append(f"Form {fi} ({form.method.upper()} {form.action}):")
+                frame_info = f" in iframe {form.frame_url}" if form.frame_url else ""
+                lines.append(f"Form {fi} ({form.method.upper()} {form.action}){frame_info}:")
                 for el in form.fields:
                     lines.append(f"  {el.to_prompt_line()}")
 
@@ -162,10 +169,19 @@ class PageObserver:
         self,
         page: Page,
         *,
-        max_elements: int = 50,
+        max_elements: int = 80,
         max_text_chars: int = 2000,
+        interest_patterns: list[str] | None = None,
     ) -> PageState:
-        """Extract a complete ``PageState`` from the current page."""
+        """Extract a complete ``PageState`` from the current page.
+
+        Args:
+            page: The Playwright page to observe.
+            max_elements: Hard cap on interactive elements to extract.
+            max_text_chars: Cap on visible text to extract.
+            interest_patterns: Optional list of substrings. If provided, only iframes
+                matching these patterns will be scanned for forms.
+        """
         self.reset()
 
         url = page.url
@@ -174,7 +190,7 @@ class PageObserver:
         except Exception:
             title = ""
 
-        forms = await self._extract_forms(page, max_elements=max_elements)
+        forms = await self._extract_forms(page, max_elements=max_elements, interest_patterns=interest_patterns)
         form_indices = {el.index for form in forms for el in form.fields}
 
         interactive = await self._extract_interactive(
@@ -211,10 +227,39 @@ class PageObserver:
     # Internal extraction helpers
     # ------------------------------------------------------------------
 
-    async def _extract_forms(self, page: Page, *, max_elements: int) -> list[FormInfo]:
+    async def _extract_forms(
+        self,
+        page: Page,
+        *,
+        max_elements: int,
+        interest_patterns: list[str] | None = None,
+    ) -> list[FormInfo]:
+        forms: list[FormInfo] = []
+
+        # 1. Extract from main frame
+        forms.extend(await self._extract_forms_from_frame(page.main_frame, page, max_elements, interest_patterns))
+
+        # 2. Extract from iframes (only if they match interest patterns)
+        if interest_patterns:
+            for frame in page.frames:
+                if frame == page.main_frame:
+                    continue
+                frame_url = frame.url or ""
+                if any(p in frame_url.lower() for p in interest_patterns):
+                    forms.extend(await self._extract_forms_from_frame(frame, page, max_elements, interest_patterns))
+
+        return forms
+
+    async def _extract_forms_from_frame(
+        self,
+        frame: Frame,
+        page: Page,
+        max_elements: int,
+        interest_patterns: list[str] | None = None,
+    ) -> list[FormInfo]:
         forms: list[FormInfo] = []
         try:
-            form_handles = await page.query_selector_all("form")
+            form_handles = await frame.query_selector_all("form")
         except Exception:
             return forms
 
@@ -228,19 +273,37 @@ class PageObserver:
                 action, method = "", "get"
 
             fields = await self._extract_fields_in(form_el, page, max_elements)
-            forms.append(FormInfo(action=action, method=method, fields=fields))
+            forms.append(FormInfo(
+                action=action,
+                method=method,
+                fields=fields,
+                frame_url=frame.url if frame != page.main_frame else ""
+            ))
+
+        # Also check for forms not wrapped in <form> tags in specified iframes (Workday/iCIMS)
+        if not forms and interest_patterns and any(p in frame.url.lower() for p in interest_patterns):
+            fields = await self._extract_fields_in(frame, page, max_elements)
+            if fields:
+                forms.append(FormInfo(
+                    action="implicit",
+                    method="post",
+                    fields=fields,
+                    frame_url=frame.url
+                ))
+
         return forms
 
     async def _extract_fields_in(
         self,
-        container: ElementHandle,
+        container: ElementHandle | Frame,
         page: Page,
         max_elements: int,
     ) -> list[ElementInfo]:
         fields: list[ElementInfo] = []
         try:
             inputs = await container.query_selector_all(
-                "input, select, textarea, button[type='submit'], button:not([type])"
+                "input, select, textarea, button[type='submit'], button:not([type]), "
+                "[role='combobox'], [role='listbox'], [aria-haspopup='listbox']"
             )
         except Exception:
             return fields
@@ -285,25 +348,42 @@ class PageObserver:
                     if (tag === 'input' && type === 'hidden') return null;
                     const rect = el.getBoundingClientRect();
                     if (rect.width === 0 && rect.height === 0) return null;
+                    
                     const labels = el.labels ? Array.from(el.labels).map(l => l.textContent.trim()).filter(Boolean) : [];
                     const ariaLabel = el.getAttribute('aria-label') || '';
                     const placeholder = el.getAttribute('placeholder') || '';
                     const name = el.getAttribute('name') || '';
                     const id = el.id || '';
+                    
+                    const automationId = el.getAttribute('data-automation-id') || '';
+                    const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') || '';
+                    const maxLengthAttr = el.getAttribute('maxlength');
+                    const ariaExpanded = el.getAttribute('aria-expanded');
+                    const ariaHasPopup = el.getAttribute('aria-haspopup') || '';
+                    const role = el.getAttribute('role') || '';
+                    
                     const label = labels[0] || ariaLabel || placeholder || name || el.textContent?.trim().substring(0, 80) || '';
+                    
                     let selector = '';
-                    if (id) selector = '#' + CSS.escape(id);
+                    if (automationId) selector = `[data-automation-id="${automationId}"]`;
+                    else if (testId) selector = `[data-testid="${testId}"]`;
+                    else if (id) selector = '#' + CSS.escape(id);
                     else if (name) selector = tag + '[name="' + name + '"]';
                     else selector = '';
+                    
                     const value = el.value || '';
                     const required = el.required || el.getAttribute('aria-required') === 'true';
                     const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                    
                     let options = [];
                     if (tag === 'select') {
                         options = Array.from(el.options).map(o => o.textContent.trim()).slice(0, 20);
                     }
-                    const role = el.getAttribute('role') || '';
-                    return { tag, type, label, selector, value, required, disabled, options, role };
+                    
+                    return { 
+                        tag, type, label, selector, value, required, disabled, options, role,
+                        automationId, testId, maxLengthAttr, ariaHasPopup
+                    };
                 }""",
                 el,
             )
@@ -316,13 +396,23 @@ class PageObserver:
         tag: str = props.get("tag", "")
         etype: str = props.get("type", "")
         role_attr: str = props.get("role", "")
+        aria_has_popup: str = props.get("ariaHasPopup", "")
 
         if etype in ("checkbox", "radio"):
             role = etype
+        elif role_attr == "combobox" or aria_has_popup == "listbox":
+            role = "custom_select"
         elif role_attr:
             role = role_attr
         else:
             role = _TAG_TO_ROLE.get(tag, tag)
+
+        maxlength = None
+        if props.get("maxLengthAttr"):
+            try:
+                maxlength = int(props["maxLengthAttr"])
+            except (ValueError, TypeError):
+                pass
 
         idx = self._assign_index(el)
         return ElementInfo(
@@ -336,6 +426,9 @@ class PageObserver:
             options=[str(o) for o in props.get("options", [])],
             required=bool(props.get("required", False)),
             disabled=bool(props.get("disabled", False)),
+            maxlength=maxlength,
+            automation_id=str(props.get("automationId", "")),
+            test_id=str(props.get("testId", "")),
         )
 
     async def _extract_errors(self, page: Page) -> list[str]:

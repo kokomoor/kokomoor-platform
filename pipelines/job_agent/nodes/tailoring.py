@@ -29,6 +29,7 @@ from pipelines.job_agent.models.resume_tailoring import (
     ResumeTailoringPlan,
     TailoredResumeDocument,
 )
+from pipelines.job_agent.resume.age_up import age_up_profile
 from pipelines.job_agent.resume.applier import apply_tailoring_plan
 from pipelines.job_agent.resume.profile import format_profile_for_llm, load_master_profile
 from pipelines.job_agent.resume.renderer import render_resume_docx
@@ -42,6 +43,15 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+_AGE_UP_RESUME_ADDENDUM = """
+## Seniority Framing (Active)
+Frame the candidate as a mid-to-senior professional throughout:
+- General Dynamics / Electric Boat: four years of engineering experience, 2019-2023, progressing from Engineer I to Engineer II. Do not frame any phase as an internship or describe any work as early-career or entry-level. If rewriting EB bullets, lead with project scope and outcomes — not training, onboarding, or "first" experiences.
+- Professional summary: write for a senior/experienced-professional audience. No phrasing that signals recent graduation, "developing into", or "aspiring to". The summary should read as a peer addressing a hiring team, not a candidate seeking a first real job.
+- Bullet rewrites: project-owner framing. Lead with scope, responsibility, and outcome. Avoid "supported", "assisted", or "helped" — the candidate ran programs, built systems, and delivered results.
+- MIT Sloan MBA: treat as an active credential earned alongside real work, not the primary identity. Engineering experience and startup track record lead the narrative; the MBA reinforces analytical and business judgment.
+"""
 
 _ENGINE: TailoringEngine[
     JobAgentState,
@@ -103,37 +113,42 @@ def _build_spec() -> TailoringSpec[
 
 
 _RESUME_PLAN_SYSTEM = (
-    "You produce a ResumeTailoringPlan that selects, orders, and "
-    "optionally rewrites resume bullets for a specific role.\n\n"
-    "Rules:\n"
-    "- Select the most relevant bullets for each experience and education "
-    "section.\n"
-    "- Order bullets within each section by relevance to the role — "
-    "strongest match first.\n"
-    "- For each bullet, choose one operation:\n"
-    "  - keep: use the bullet text as-is.\n"
-    "  - shorten: use the short variant (if available) for space savings.\n"
-    "  - rewrite: provide new text. You MUST preserve all employer names, "
-    "numbers, dates, and factual claims. Only change emphasis and framing.\n"
-    "- Maximum 4 bullets per experience section, 3 per education section.\n"
-    "- Write a 1-2 sentence professional summary (max 40 words) targeting "
-    "this specific role.\n"
-    "- Select the most relevant subset of skills to highlight (8-12 items).\n"
+    "You produce a ResumeTailoringPlan that selects, orders, and contours "
+    "resume bullets for a specific role. The candidate's work-history "
+    "spine is fixed — your job is to adjust framing, not to curate which "
+    "jobs appear.\n\n"
+    "Section tiers and anchor bullets:\n"
+    "- Sections are marked (PINNED) or (OPTIONAL) in the candidate "
+    "profile. Pinned sections MUST appear in your plan; optional sections "
+    "appear only when the role's domain tags align.\n"
+    "- Bullets marked (ANCHOR) are load-bearing and MUST appear in their "
+    "section's bullet_order. Non-anchor bullets are selectable.\n\n"
+    "Bullet operations:\n"
+    "- keep: use the master bullet text as-is. Default choice.\n"
+    "- shorten: use the short variant (if defined) for space savings.\n"
+    "- recast: compose new bullet text from the bullet's own text + "
+    "source_material. You MUST preserve every dollar amount, percentage, "
+    "integer, acronym, and multi-word capitalized proper noun verbatim. "
+    "Length must not exceed the master's word count by more than 20%. The "
+    "applier rejects and falls back to keep on violation — so do not "
+    "invent facts, do not paraphrase numbers, do not expand length.\n"
+    "- rewrite: deprecated alias for recast; prefer recast in new plans.\n\n"
+    "Quantitative caps:\n"
+    "- Experience: at most 5 bullets per section; Education: at most 3.\n"
+    "- Summary: 1-2 sentences, max 40 words, third-person / neutral voice.\n"
+    "- Skills highlight: 8-12 most-relevant items.\n"
+    "- Supplementary projects: at most 4.\n\n"
+    "Style constraints:\n"
     "- Only reference bullet IDs and section IDs that appear in the "
     "candidate profile provided in the user message.\n"
     "- In bullet text and summary prose, do not use inline em dashes or "
     "en dashes. Prefer semicolons, commas, or sentence splits.\n\n"
-    "Page-fill constraint:\n"
-    "The rendered resume must fill at least one full page. A resume that "
-    "leaves visible whitespace at the bottom of the first page looks "
-    "incomplete. To achieve this:\n"
-    "- Include at least 3 experience sections with 3-4 bullets each.\n"
-    "- Include at least 2 education sections with 1-2 bullets each.\n"
-    "- Include at least 6-8 skills in the skills highlight.\n"
-    "- When in doubt between keeping an additional relevant bullet or "
-    "omitting it, keep it.\n"
-    "- The resume may extend slightly past one page for senior roles; "
-    "that is acceptable. Being shorter than one page is never acceptable.\n"
+    "Page-fill target:\n"
+    "- Include every pinned section (not optional).\n"
+    "- 3-5 bullets per experience section; 2-3 per education section.\n"
+    "- When undecided between keeping one more relevant bullet or "
+    "omitting it, keep it. The resume should comfortably fill one page "
+    "and may run to a second page for senior roles.\n"
 )
 
 
@@ -170,8 +185,11 @@ def _on_skip(state: JobAgentState) -> None:
         state.tailored_listings = []
 
 
-def _load_profile(_state: JobAgentState, runtime: _Runtime) -> ResumeMasterProfile:
-    return load_master_profile(Path(runtime.settings.resume_master_profile_path))
+def _load_profile(state: JobAgentState, runtime: _Runtime) -> ResumeMasterProfile:
+    profile = load_master_profile(Path(runtime.settings.resume_master_profile_path))
+    if state.age_up:
+        return age_up_profile(profile)
+    return profile
 
 
 def _on_missing_context(state: JobAgentState, listing: JobListing, _runtime: _Runtime) -> None:
@@ -209,7 +227,7 @@ def _build_inventory_view(
 
 
 def _build_prompt(
-    _state: JobAgentState,
+    state: JobAgentState,
     listing: JobListing,
     analysis: JobAnalysisResult,
     _profile: ResumeMasterProfile,
@@ -221,7 +239,9 @@ def _build_prompt(
         candidate_profile_structured=inventory_view,
         positioning_rules=positioning_rules(analysis.domain_tags),
     )
-    logger.debug("tailoring.prompt_built", dedup_key=listing.dedup_key)
+    if state.age_up:
+        prompt += _AGE_UP_RESUME_ADDENDUM
+    logger.debug("tailoring.prompt_built", dedup_key=listing.dedup_key, age_up=state.age_up)
     return prompt
 
 

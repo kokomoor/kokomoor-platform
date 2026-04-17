@@ -255,6 +255,50 @@ class Settings(BaseSettings):
         description="Enable optional critique pass for cover-letter generation.",
     )
 
+    # --- Application Engine ---
+    candidate_application_profile_path: str = Field(
+        default=str(
+            _PROJECT_ROOT / "pipelines" / "job_agent" / "context" / "candidate_application.yaml"
+        ),
+        description="Path to the candidate application profile YAML.",
+    )
+    application_max_per_run: int = Field(
+        default=5,
+        ge=0,
+        description="Max applications to attempt per run. 0 = no cap.",
+    )
+    application_require_human_review: bool = Field(
+        default=True,
+        description="Pause at submit for human review instead of auto-submitting.",
+    )
+    application_linkedin_daily_cap: int = Field(
+        default=25,
+        ge=1,
+        description="Max LinkedIn Easy Apply submissions per day per account.",
+    )
+    application_min_delay_seconds: float = Field(
+        default=60.0,
+        ge=10.0,
+        description="Minimum seconds between application attempts.",
+    )
+    application_debug_capture_enabled: bool = Field(
+        default=True,
+        description="Capture screenshots/HTML/metadata for application failures.",
+    )
+    application_debug_capture_dir: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "application_debug"),
+        description="Directory for application failure-capture artifacts.",
+    )
+    application_debug_capture_html: bool = Field(
+        default=False,
+        description=(
+            "Include HTML snapshots in application failure captures. OFF by "
+            "default: a half-filled application form serialises PII (name, "
+            "email, phone, EEO answers, authorization responses) to disk. "
+            "Opt in explicitly when debugging a specific failure."
+        ),
+    )
+
     # --- Tailoring Cost Control ---
     tailoring_max_listings: int = Field(
         default=5,
@@ -420,6 +464,10 @@ class Settings(BaseSettings):
         default=str(_PROJECT_ROOT / "data" / "scraper_dedup.db"),
         description="SQLite database for scraper deduplication.",
     )
+    application_dedup_db_path: str = Field(
+        default=str(_PROJECT_ROOT / "data" / "application_dedup.db"),
+        description="SQLite database for application deduplication.",
+    )
     scraper_dedup_ttl_days: int = Field(
         default=90, ge=1, description="Days before pruning old dedup keys."
     )
@@ -511,6 +559,17 @@ class Settings(BaseSettings):
         if not p.is_absolute():
             p = _PROJECT_ROOT / p
         return str(p)
+
+    @field_validator(
+        "resume_master_profile_path",
+        "cover_letter_style_guide_path",
+        mode="after",
+    )
+    @classmethod
+    def _ensure_file_exists(cls, v: str) -> str:
+        if not Path(v).is_file():
+            raise ValueError(f"Required configuration file missing: {v}")
+        return v
 
     @property
     def is_dev(self) -> bool:

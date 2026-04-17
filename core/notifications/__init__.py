@@ -49,7 +49,11 @@ async def send_notification(
     recipient = to_email or settings.notification_to_email
 
     if not settings.smtp_host or not recipient:
-        logger.warning("notification_skipped", reason="SMTP not configured")
+        # Intentionally unconfigured SMTP is the default local-dev state,
+        # not an operational alarm. Log at debug so pipeline runs don't
+        # emit a WARN on every execution while still leaving a trail for
+        # anyone tracing why a notification did not go out.
+        logger.debug("notification_skipped", reason="SMTP not configured")
         return False
 
     msg = MIMEMultipart("alternative")

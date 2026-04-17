@@ -104,11 +104,11 @@ The root `/context/` directory is **gitignored** — local-only reference materi
 
 ```
 Discovery (browser/HTTP providers) -> Filtering -> Bulk Extraction (description fetch)
-  -> Job Analysis (LLM) -> Tailoring (LLM) -> Cover Letter Tailoring (LLM)
-  -> Tracking -> Notification
+  -> Job Analysis (LLM) -> Ranking -> Tailoring (LLM) -> Cover Letter Tailoring (LLM)
+  -> Application (API/Browser Agent) -> Tracking -> Notification
 ```
 
-Manual flow: `Manual Extraction (URL) -> Job Analysis -> Tailoring -> Cover Letter Tailoring -> Tracking -> Notification`
+Manual flow: `Manual Extraction (URL) -> Job Analysis -> Tailoring -> Cover Letter Tailoring -> Application -> Tracking -> Notification`
 
 ## Discovery architecture
 
@@ -121,6 +121,23 @@ The discovery subsystem uses two provider tiers:
 The `DiscoveryOrchestrator` coordinates both tiers with `asyncio.gather()`. Browser providers share an `asyncio.Semaphore(max_concurrent_providers)` to limit simultaneous Playwright contexts.
 
 The `bulk_extraction_node` runs after filtering to fetch full job descriptions. Discovery emits minimal metadata (title, company, URL, salary hint) -- description fetch is deferred to after filtering has reduced the listing count.
+
+## Application Engine architecture
+
+The application engine automates the final submission of job applications using a three-tier strategy:
+
+1. **API Tier**: Direct POST submissions to public ATS APIs (Greenhouse, Lever). Fastest and most reliable.
+2. **Template Tier**: Specialized Playwright scripts for high-volume structured forms (LinkedIn Easy Apply, Ashby).
+3. **Agent Tier**: Autonomous LLM-driven browser navigation (`WebAgentController`) for long-tail ATS platforms (Workday, iCIMS, Taleo, etc.).
+
+The `ApplicationRouter` follows redirect chains (e.g. from LinkedIn to a company career site) to discover the actual ATS and select the best strategy. The engine includes:
+
+- **Workday Specialization**: Automatic account-wall detection and resume-prefill verification.
+- **Failure Capture**: screenshots, HTML snapshots, and metadata bundles for every failed or stuck attempt land in `data/application_debug/`.
+- **Deduplication**: Tracks successful submissions in a persistent SQLite store to prevent double-applying.
+- **Observability**: Prometheus metrics for attempts, fields filled, and LLM QA calls per ATS platform.
+- **Deterministic Field Mapper**: Handles 80%+ of common form fields without LLM calls.
+- **LLM QA Answerer**: Uses the candidate profile to answer custom/open-ended ATS questions with cross-run caching.
 
 ## Configuration
 
