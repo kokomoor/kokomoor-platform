@@ -27,12 +27,15 @@ education:
         tags: [academic]
 
 experience:
+  # exp_alpha is tier=optional so tag-filter tests exercise the
+  # hide-optional-when-no-tags-match path. exp_beta is pinned (default).
   - id: exp_alpha
     company: Alpha Corp
     title: Senior Engineer
     dates: "2022-2024"
     location: New York, NY
     subtitle: Enterprise SaaS Platform
+    tier: optional
     bullets:
       - id: alpha_platform
         text: "Led development of microservices platform serving 10M+ requests/day across 15 services"

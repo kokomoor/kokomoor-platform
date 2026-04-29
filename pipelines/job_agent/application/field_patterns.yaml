@@ -1,0 +1,56 @@
+# field_patterns.yaml — Deterministic form-field to profile mapping patterns.
+#
+# Normalized label token → [profile_section, getter_key]
+# getter_key must match a key in FieldMapper._GETTERS.
+
+personal:
+  first name: personal.first_name
+  last name: personal.last_name
+  full name: personal.full_name
+  name: personal.full_name
+  email: personal.email
+  phone: personal.phone_formatted
+  linkedin: personal.linkedin_url
+  github: personal.github_url
+  portfolio: personal.portfolio_url
+  website: personal.website_url
+
+address:
+  city: address.city
+  state: address.state
+  zip: address.zip
+  country: address.country
+
+authorization:
+  authorized to work: authorization.authorized_us
+  work authorization: authorization.authorized_us
+  sponsorship: authorization.require_sponsorship
+  require sponsorship: authorization.require_sponsorship
+  visa: authorization.require_sponsorship
+
+education:
+  degree: education.highest_degree
+  school: education.school
+  university: education.school
+  graduation: education.graduation_year
+  gpa: education.gpa
+  field of study: education.field_of_study
+  major: education.field_of_study
+
+screening:
+  years of experience: screening.years_experience
+  years experience: screening.years_experience
+  relocate: screening.willing_to_relocate
+  salary: screening.desired_salary
+  compensation: screening.desired_salary
+
+source:
+  how did you hear: source.default
+  how did you find: source.default
+
+demographics:
+  gender: demographics.gender
+  race: demographics.race_ethnicity
+  ethnicity: demographics.race_ethnicity
+  veteran: demographics.veteran_status
+  disability: demographics.disability_status

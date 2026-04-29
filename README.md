@@ -1,18 +1,20 @@
 # Kokomoor Platform
 
+> Built this to solve my own job search. Ended up being a more interesting engineering problem than most things I get paid for.
+
 **An agentic pipeline platform that automates the tedious parts of job searching** — from scraping listings to tailoring resumes — so you can focus on the interviews that matter.
 
 ---
 
 ### What it does
 
-Drop in a job URL. Get back a tailored `.docx` resume in seconds.
+Drop in a job URL. The pipeline scrapes the full job page, runs structured LLM analysis to extract what the employer actually cares about, then generates a precision-tailored resume from a structured master profile — bullet selection, section ordering, and formatting all handled in code, not negotiated with the model.
+
+The interesting engineering is in the seams: anti-detection browser automation that survives LinkedIn's bot detection, a two-pass LLM architecture that separates cheap fact-extraction from expensive reasoning, and a deterministic document renderer that keeps layout out of the model's hands entirely.
 
 ```bash
 python scripts/run_manual_url_tailor.py "https://amazon.jobs/en/jobs/3185564/principal-product-manager"
 ```
-
-The pipeline scrapes the full job page (qualifications, requirements, salary, everything), runs structured LLM analysis to understand what the employer cares about, then generates a precision-tailored resume from your master profile — formatting, section ordering, and bullet selection all handled automatically.
 
 ### How it works
 
@@ -44,9 +46,9 @@ Job URL ──► Extraction ──► Job Analysis (LLM) ──► Tailoring (L
 
 ### Example use cases
 
+- **Portfolio artifact**: The codebase demonstrates production patterns — LangGraph orchestration, structured LLM outputs, anti-detection browser automation, typed configuration, and comprehensive testing across 270+ tests with no API calls.
 - **Active job search**: Feed URLs from job boards as you find interesting listings. Each produces a role-specific resume in `data/tailored_resumes/`.
 - **Pipeline automation**: The full graph (discovery → filtering → analysis → tailoring → tracking → notification) runs end-to-end when the discovery node is implemented with board-specific scrapers.
-- **Portfolio artifact**: The codebase demonstrates production patterns — LangGraph orchestration, structured LLM outputs, anti-detection browser automation, typed configuration, and comprehensive testing.
 
 ---
 
@@ -90,15 +92,24 @@ kokomoor-platform/
 
 - **`core/` is a library, not a service.** Pipelines import from it. No microservice overhead.
 - **Each pipeline is self-contained.** Own models, nodes, tests. Can be developed independently while sharing infrastructure.
-- **Two LLM passes, not one.** Job analysis (cheap model, full JD) and tailoring plan (capable model, filtered profile) run in separate graph nodes. Facts live in your profile YAML, not in LLM output. Layout is owned by code, not negotiated with the model.
+- **Two LLM passes, not one.** Job analysis (cheap model, full JD) and tailoring plan (capable model, filtered profile) run in separate graph nodes. Facts live in your profile YAML, not in LLM output.
+- **No layout in the model.** The LLM produces a tailoring plan — which bullets to keep, shorten, or rewrite. A deterministic applier executes it. A code-based renderer formats the document. The model never touches the .docx directly.
 - **Anti-detection is first-class.** Browser automation uses randomized fingerprints, rate limiting, and realistic timing through `BrowserManager`.
 - **Observability from day one.** Every LLM call is traced (LangSmith), costed, and logged (structlog).
+
+## Why I built this
+
+I'm finishing my MBA at MIT Sloan and running a job search in deeptech — defense, AI infrastructure, advanced energy. The problem I kept running into: tailoring a resume to a specific JD is genuinely tedious work, and the tedious work compounds across 30+ applications.
+
+So I automated it. The platform pulls job listings, analyzes them against a structured master profile (`candidate_profile.yaml`), and generates tailored resumes and cover letters. I use it for my own search. It works.
+
+The secondary goal was to build something production-grade enough to show: LangGraph orchestration, anti-detection browser automation, structured LLM outputs, typed configuration, comprehensive testing. All the patterns I'd want to see in a codebase I was inheriting.
 
 ## Stack
 
 | Layer | Choice |
 |-------|--------|
-| Language | Python 3.11+ |
+| Language | Python 3.12+ |
 | LLM | Anthropic API (Claude Haiku + Sonnet) |
 | Orchestration | LangGraph |
 | Browser | Playwright (async, stealth) |
@@ -188,7 +199,7 @@ The discovery subsystem scrapes job boards and public APIs to find relevant list
 | `KP_DISCOVERY_LEVER_ENABLED` | `true` | Lever (HTTP API, no auth) |
 | `KP_DISCOVERY_WORKDAY_ENABLED` | `false` | Workday (browser, requires target list) |
 
-**Session persistence:** Browser sessions are stored in `data/sessions/` (gitignored). Established sessions dramatically reduce bot detection risk. LinkedIn sessions need 48-72h of warmup before reliable operation -- the first run may require manual CAPTCHA or email verification.
+**Session persistence:** Browser sessions are stored in `data/sessions/` (gitignored). Established sessions dramatically reduce bot detection risk. LinkedIn sessions need 48-72h of warmup before reliable operation — the first run may require manual CAPTCHA or email verification.
 
 **LinkedIn setup:** Set `KP_LINKEDIN_EMAIL` and `KP_LINKEDIN_PASSWORD`. The first run will create a session file. After manual verification (if prompted), subsequent runs reuse the stored session.
 
@@ -197,7 +208,7 @@ The discovery subsystem scrapes job boards and public APIs to find relevant list
 **CAPTCHA strategy:** `KP_CAPTCHA_STRATEGY` controls behavior when CAPTCHAs are encountered:
 - `avoid` (default behavior: skip the provider)
 - `pause_notify` (log warning, notify owner, skip provider for this run)
-- `solve` (submit to 2captcha API -- requires `KP_CAPTCHA_API_KEY`)
+- `solve` (submit to 2captcha API — requires `KP_CAPTCHA_API_KEY`)
 
 **Concurrency:** `KP_DISCOVERY_MAX_CONCURRENT_PROVIDERS` (default 2) limits simultaneous browser contexts. `KP_DISCOVERY_MAX_PAGES_PER_SEARCH` (default 8) caps pagination depth per search URL.
 

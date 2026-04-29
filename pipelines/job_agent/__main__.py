@@ -8,6 +8,7 @@ LangGraph, and executes a pipeline run.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 
@@ -23,6 +24,14 @@ from pipelines.job_agent.state import JobAgentState, coerce_state
 
 async def main() -> None:
     """Execute a single pipeline run."""
+    parser = argparse.ArgumentParser(description="Run the job application pipeline.")
+    parser.add_argument(
+        "--older",
+        action="store_true",
+        help="Age-up mode: contour resume and cover letter to read as mid-to-senior career.",
+    )
+    args = parser.parse_args()
+
     setup_logging()
     logger = structlog.get_logger("job_agent")
     settings = get_settings()
@@ -31,6 +40,7 @@ async def main() -> None:
         "pipeline_init",
         environment=settings.environment.value,
         has_api_key=settings.has_anthropic_key,
+        age_up=args.older,
     )
 
     # Ensure the database schema exists before any node tries to read it.
@@ -49,7 +59,12 @@ async def main() -> None:
             "SpaceX",
             "Apple",
         ],
-        target_roles=["TPM", "Senior Engineer", "Engineering Manager", "Technical Product Manager"],
+        target_roles=[
+            "Technical Program Manager",
+            "Technical Product Manager",
+            "Senior Engineer",
+            "Engineering Manager",
+        ],
         salary_floor=170_000,
         sources=[JobSource.WELLFOUND, JobSource.BUILTIN, JobSource.LINKEDIN],
     )
@@ -57,6 +72,7 @@ async def main() -> None:
     initial_state = JobAgentState(
         search_criteria=criteria,
         run_id="manual-run",
+        age_up=args.older,
     )
 
     # Build and invoke the graph.

@@ -516,10 +516,50 @@ def _claim_tokens(paragraph: str) -> set[str]:
     return {t for t in no_punct.split() if t not in stop_words}
 
 
+_COMPANY_SUFFIX_WORDS: frozenset[str] = frozenset({
+    "inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation",
+    "co", "the", "and", "of", "a", "an", "plc", "gmbh", "ag", "sa",
+})
+
+
+def _company_name_in_text(company: str, text: str) -> bool:
+    """Return True if the company is mentioned in text.
+
+    Accepts: exact full name, any significant token from the name (len >= 3,
+    not a corporate-suffix stop-word), or the acronym formed from the first
+    letter of each significant word.  Handles cases like 'Advanced Micro
+    Devices, Inc' where the model writes 'AMD' throughout the letter body.
+    """
+    text_lower = text.lower()
+    company_lower = company.strip().lower()
+
+    if company_lower in text_lower:
+        return True
+
+    tokens = [
+        t for t in re.findall(r"[a-z]+", company_lower)
+        if len(t) >= 3 and t not in _COMPANY_SUFFIX_WORDS
+    ]
+    if tokens and any(t in text_lower for t in tokens):
+        return True
+
+    sig_words = [
+        w for w in company.split()
+        if len(re.sub(r"[^a-zA-Z]", "", w)) >= 2
+        and re.sub(r"[^a-zA-Z]", "", w).lower() not in _COMPANY_SUFFIX_WORDS
+    ]
+    if len(sig_words) >= 2:
+        acronym = "".join(re.sub(r"[^a-zA-Z]", "", w)[0].lower() for w in sig_words)
+        if len(acronym) >= 2 and re.search(rf"\b{re.escape(acronym)}\b", text_lower):
+            return True
+
+    return False
+
+
 def _warn_company_reference(
     plan: CoverLetterPlan, expected_company: str, warnings: list[str]
 ) -> None:
-    if expected_company.strip().lower() not in plan.company_motivation.lower():
+    if not _company_name_in_text(expected_company, plan.company_motivation):
         warnings.append(
             f"company_motivation field does not reference the target company '{expected_company}'."
         )
@@ -533,9 +573,11 @@ def _ensure_company_in_body(plan: CoverLetterPlan, expected_company: str) -> Non
     name in the prompt; refusing to use it is a hard failure rather than
     a quality nag, because the file would otherwise be sent to a human
     recipient with the same flaw the warning was supposed to flag.
+
+    Accepts the full company name, any significant token from it, or a
+    recognizable acronym (e.g. 'AMD' for 'Advanced Micro Devices, Inc').
     """
-    body_text = _body_text(plan).lower()
-    if expected_company.strip().lower() not in body_text:
+    if not _company_name_in_text(expected_company, _body_text(plan)):
         raise ValueError(f"Letter body does not mention the target company '{expected_company}'.")
 
 

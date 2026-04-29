@@ -49,6 +49,14 @@ def _adjacent_key(char: str) -> str:
 class HumanBehavior:
     """Simulate realistic human browser interactions."""
 
+    def __init__(self) -> None:
+        # Seed the cursor position to a natural starting point near the
+        # top-left of a typical viewport. move_mouse_naturally reads
+        # _last_x/_last_y before writing them; without this initialiser
+        # the first call raises AttributeError.
+        self._last_x: float = random.uniform(200, 400)
+        self._last_y: float = random.uniform(150, 300)
+
     async def reading_pause(self, content_length_chars: int) -> None:
         """Pause proportionally to content length, simulating reading."""
         words = content_length_chars / 5
@@ -85,10 +93,7 @@ class HumanBehavior:
 
     async def move_mouse_naturally(self, page: Page, target_x: float, target_y: float) -> None:
         """Move mouse along a quadratic Bezier curve with deceleration."""
-        start: dict[str, float] = await page.evaluate(
-            "() => ({ x: window._lastMouseX || 300, y: window._lastMouseY || 400 })"
-        )
-        sx, sy = start["x"], start["y"]
+        sx, sy = self._last_x, self._last_y
 
         mx, my = (sx + target_x) / 2, (sy + target_y) / 2
         cx = mx + random.uniform(-60, 60)
@@ -106,9 +111,7 @@ class HumanBehavior:
             else:
                 await asyncio.sleep(random.uniform(0.006, 0.018))
 
-        await page.evaluate(
-            f"() => {{ window._lastMouseX = {target_x}; window._lastMouseY = {target_y}; }}"
-        )
+        self._last_x, self._last_y = target_x, target_y
 
     async def human_click(self, page: Page, element: Any) -> None:
         """Click an element with natural mouse movement and slight offset."""

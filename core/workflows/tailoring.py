@@ -57,8 +57,28 @@ class TailoringSpec(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Document
     # Optional cacheable system prefix. Must return the SAME bytes on
     # every call within a run so the Anthropic prefix cache hits.
     build_cached_system: Callable[[StateT, RuntimeT], str | None] | None = None
+    # Optional per-item semantic validator factory. When provided, the
+    # engine closes over the item context and hands the returned
+    # ``(plan) -> None`` callable to ``structured_complete`` so
+    # domain-rule violations (word budgets, banned phrases, cross-field
+    # consistency) are fed back to the LLM and retried rather than
+    # swallowed as terminal errors. Must not perform I/O — it runs
+    # inside the retry loop and may be called multiple times per item.
+    build_plan_validator: (
+        Callable[
+            [StateT, ItemT, ContextT, InventoryT, RuntimeT],
+            Callable[[PlanT], None],
+        ]
+        | None
+    ) = None
     # Upper bound on concurrent in-flight LLM requests. 1 = sequential.
     concurrency: int = 1
+    # Number of retry attempts passed to structured_complete on validation failure.
+    max_retries: int = 2
+    # When True, if structured_complete exhausts retries with the semantic
+    # validator, one additional attempt runs without any validator so that
+    # something is always rendered. Logged loudly as a fallback event.
+    fallback_without_validator: bool = False
 
 
 class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, DocumentT, RuntimeT]):
@@ -102,22 +122,55 @@ class TailoringEngine(Generic[StateT, ItemT, ContextT, InventoryT, PlanT, Docume
                     prompt = spec.build_prompt(
                         state, item, context, inventory, inventory_view, runtime
                     )
-                    plan = await structured_complete(
-                        llm_client,
-                        prompt,
+                    plan_validator = None
+                    if spec.build_plan_validator is not None:
+                        plan_validator = spec.build_plan_validator(
+                            state, item, context, inventory, runtime
+                        )
+                    _sc_kwargs = dict(
                         response_model=spec.plan_model_type,
                         model=spec.get_model(state, runtime),
                         max_tokens=spec.get_max_tokens(state, runtime),
                         run_id=spec.get_run_id(state),
                         system_prefix=cached_system,
                         cache_system=cached_system is not None,
+                        max_retries=spec.max_retries,
                     )
+                    try:
+                        plan = await structured_complete(
+                            llm_client,
+                            prompt,
+                            validator=plan_validator,
+                            **_sc_kwargs,
+                        )
+                    except Exception as primary_exc:
+                        if spec.fallback_without_validator and plan_validator is not None:
+                            logger.warning(
+                                "tailoring.fallback_without_validator_fired",
+                                workflow=spec.name,
+                                original_error=str(primary_exc)[:300],
+                            )
+                            plan = await structured_complete(
+                                llm_client,
+                                prompt,
+                                validator=None,
+                                **{**_sc_kwargs, "max_retries": 1},
+                            )
+                        else:
+                            raise
                     spec.validate_plan(state, item, context, inventory, plan, runtime)
                     document = spec.apply_plan(state, item, context, inventory, plan, runtime)
                     output_path = spec.get_output_path(state, item, runtime)
                     spec.render_document(state, item, document, output_path, runtime)
                     spec.on_item_success(state, item, plan, document, output_path, runtime)
                 except Exception as exc:
+                    logger.warning(
+                        "tailoring.item_failed",
+                        workflow=spec.name,
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:500],
+                        exc_info=True,
+                    )
                     spec.on_item_error(state, item, exc, runtime)
 
         items = spec.get_items(state)

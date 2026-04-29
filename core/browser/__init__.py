@@ -126,6 +126,18 @@ class BrowserManager:
             raise RuntimeError(msg)
         return cast("dict[str, Any]", await self._context.storage_state())
 
+    async def get_cookies(self, urls: list[str] | None = None) -> list[dict[str, Any]]:
+        """Return cookies in the browser context, optionally filtered by URL list.
+
+        Matches Playwright's ``BrowserContext.cookies(urls)`` signature.
+        Returns an empty list when called outside a context manager.
+        """
+        if self._context is None:
+            return []
+        if urls:
+            return cast("list[dict[str, Any]]", await self._context.cookies(urls))
+        return cast("list[dict[str, Any]]", await self._context.cookies())
+
     async def rate_limited_goto(
         self,
         page: Page,

@@ -244,6 +244,32 @@ class DedupEngine:
         existing = await self.contains_batch(site_id, keys)
         return [k for k in keys if k not in existing]
 
+    async def try_claim(self, site_id: str, key: str) -> bool:
+        """Atomic check-and-set to claim a key. Returns True if claimed, False if already exists."""
+        async with self._lock:
+            return await asyncio.to_thread(self._try_claim_locked, site_id, key)
+
+    def _try_claim_locked(self, site_id: str, key: str) -> bool:
+        import time
+        now = time.time()
+        table = self._ensure_site(site_id)
+        conn = self._get_conn()
+        bloom = self._get_bloom(site_id)
+        
+        if self._contains_locked(site_id, key):
+            return False
+            
+        try:
+            conn.execute(
+                f"INSERT INTO [{table}](key, first_seen_ts, last_seen_ts) VALUES (?, ?, ?)",
+                (key, now, now),
+            )
+            conn.commit()
+            bloom.add(key)
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
     async def add_batch(self, site_id: str, keys: list[str]) -> int:
         """Insert new keys. Returns count of actually-new insertions."""
         if not keys:

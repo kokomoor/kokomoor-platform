@@ -64,3 +64,22 @@ BROWSER_NAVIGATIONS = Counter(
     "Total browser page navigations",
     ["status"],
 )
+
+# --- Application Engine metrics ---
+APPLICATION_ATTEMPTS = Counter(
+    "kokomoor_application_attempts_total",
+    "Total job application attempts",
+    ["platform", "strategy", "status"],
+)
+
+APPLICATION_FIELDS_FILLED = Counter(
+    "kokomoor_application_fields_filled_total",
+    "Total form fields successfully filled",
+    ["platform"],
+)
+
+APPLICATION_LLM_QA_CALLS = Counter(
+    "kokomoor_application_llm_qa_calls_total",
+    "Total LLM calls to answer form questions",
+    ["platform"],
+)
